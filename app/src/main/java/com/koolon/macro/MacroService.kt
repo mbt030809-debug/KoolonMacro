@@ -137,6 +137,9 @@ class MacroService : AccessibilityService() {
         const val STEP_GAP_MS = 800L
 
         /** 덤프 결과를 보고 채울 것. 예: Step.ClickText("난방"), Step.Tap(540f, 1200f) */
-        val STEPS: List<Step> = emptyList()
+        val STEPS: List<Step> = listOf(
+            Step.ClickText("난방"),
+            Step.ClickText("실내"),
+        )
     }
 }
