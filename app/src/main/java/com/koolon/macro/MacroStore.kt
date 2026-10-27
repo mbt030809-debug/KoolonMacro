@@ -17,14 +17,14 @@ data class Macro(
 object MacroStore {
     /** 덤프로 확인한 코오롱 화면 기준 예시: 난방 → 안방 상세 설정 → 난방 모드 → 설정 온도 26 */
     const val SAMPLE2_NAME = "안방 외출"
-    const val SAMPLE2_SCRIPT = "click 난방\nclick 상세 설정 @2\nclick 외출\n"
+    const val SAMPLE2_SCRIPT = "click 난방\nwait 700\nclick 상세 설정 @2\nwait 600\nclick 외출\n"
 
     fun autoClose(ctx: Context) = prefs(ctx).getBoolean("autoClose", true)
 
     fun setAutoClose(ctx: Context, v: Boolean) = prefs(ctx).edit().putBoolean("autoClose", v).apply()
 
     const val SAMPLE_NAME = "안방 난방 26도"
-    const val SAMPLE_SCRIPT = "click 난방\nclick 상세 설정 @2\nclick 난방 @2\ntemp 26 + - 설정 온도\n"
+    const val SAMPLE_SCRIPT = "click 난방\nwait 700\nclick 상세 설정 @2\nwait 600\nclick 난방 @2\nwait 300\ntemp 26 + - 설정 온도\n"
 
     private const val DEFAULT_SCRIPT = "click 난방\nclick 실내\n# temp 26 + -\n# home\n"
 
