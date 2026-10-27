@@ -1,6 +1,7 @@
 package com.koolon.macro
 
 import android.app.AlarmManager
+import android.app.KeyguardManager
 import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -54,8 +55,18 @@ class AlarmReceiver : BroadcastReceiver() {
         val name = intent.getStringExtra("name") ?: return
         Scheduler.schedule(ctx, MacroStore.get(ctx, name)) // 다음 날 예약
         val s = MacroService.instance
-        if (s == null) Notifier.post(ctx, name, "접근성 서비스가 꺼져 있어 예약 실행 실패")
-        else s.runMacro(name)
+        if (s == null) {
+            Notifier.post(ctx, name, "접근성 서비스가 꺼져 있어 예약 실행 실패")
+            return
+        }
+        // PIN·지문 등으로 잠겨 있으면 지금은 실행할 수 없으므로, 잠금을 해제하는 순간 실행하도록 대기
+        val km = ctx.getSystemService(KeyguardManager::class.java)
+        if (km.isKeyguardLocked && km.isKeyguardSecure) {
+            MacroStore.setPending(ctx, name, System.currentTimeMillis())
+            Notifier.post(ctx, name, "잠금 상태입니다. 잠금을 해제하면 바로 실행합니다.")
+        } else {
+            s.runMacro(name)
+        }
     }
 }
 

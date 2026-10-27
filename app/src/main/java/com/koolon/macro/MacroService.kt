@@ -3,10 +3,12 @@ package com.koolon.macro
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.app.KeyguardManager
+import android.content.BroadcastReceiver
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.Path
@@ -38,14 +40,26 @@ class MacroService : AccessibilityService() {
         if (quick) { toast("3분 경과: 녹화 자동 종료"); finishQuickRecord() }
     }
 
+    /** 잠금 해제(USER_PRESENT) 시, 잠금 중 예약 시각이 지난 매크로를 실행 */
+    private val unlockReceiver = object : BroadcastReceiver() {
+        override fun onReceive(c: Context, i: Intent) {
+            val names = MacroStore.takePending(c, PENDING_MAX_AGE_MS)
+            if (names.isNotEmpty()) ui.postDelayed({ runAll(names) }, 1500)
+        }
+    }
+
     override fun onServiceConnected() {
         instance = this
+        val f = IntentFilter(Intent.ACTION_USER_PRESENT)
+        if (Build.VERSION.SDK_INT >= 33) registerReceiver(unlockReceiver, f, Context.RECEIVER_EXPORTED)
+        else registerReceiver(unlockReceiver, f)
         Scheduler.rescheduleAll(this)
         Shortcuts.update(this)
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
         instance = null
+        try { unregisterReceiver(unlockReceiver) } catch (e: Exception) {}
         hideOverlay()
         return super.onUnbind(intent)
     }
@@ -207,6 +221,28 @@ class MacroService : AccessibilityService() {
     fun runMacro(name: String) {
         val m = MacroStore.get(this, name)
         if (m == null) report(name, "매크로를 찾을 수 없음") else runMacro(m)
+    }
+
+    /** 여러 매크로를 순서대로 실행 (잠금 해제 후 대기분) */
+    fun runAll(names: List<String>) {
+        if (running) return
+        running = true
+        RunLog.clear()
+        Thread {
+            try {
+                for (n in names) {
+                    val m = MacroStore.get(this, n) ?: continue
+                    val (steps, errors) = Step.parse(m.script)
+                    if (errors.isNotEmpty()) { report(n, "스크립트 오류 " + errors.first()); continue }
+                    RunLog.add("실행(잠금 해제 후): $n (${steps.size}단계)")
+                    execute(n, steps)
+                }
+            } catch (e: Exception) {
+                RunLog.add("오류: ${e.message}")
+            } finally {
+                running = false
+            }
+        }.start()
     }
 
     fun runMacro(macro: Macro) {
@@ -525,6 +561,7 @@ class MacroService : AccessibilityService() {
         const val LAUNCH_WAIT_MS = 250L
         const val STEP_GAP_MS = 80L
         const val MAX_ATTEMPTS = 2
+        const val PENDING_MAX_AGE_MS = 3 * 60 * 60 * 1000L // 예약 시각 후 3시간 안에 해제하면 실행
         const val TOUCH_HOLD_MS = 150L // 누르는 시간 (너무 길면 롱프레스로 인식)
     }
 }

@@ -66,6 +66,25 @@ object MacroStore {
         prefs(ctx).edit().putString("macros", arr.toString()).apply()
     }
 
+    // 잠금 중에 예약 시각이 지난 매크로 (잠금 해제 시 실행)
+    fun setPending(ctx: Context, name: String, atMillis: Long) =
+        prefs(ctx).edit().putLong("pending_$name", atMillis).apply()
+
+    /** 기한(maxAgeMs) 안의 대기 매크로 이름을 오래된 순으로 꺼내고, 대기 목록은 모두 비움 */
+    fun takePending(ctx: Context, maxAgeMs: Long): List<String> {
+        val p = prefs(ctx)
+        val now = System.currentTimeMillis()
+        val items = p.all.filterKeys { it.startsWith("pending_") }
+        val names = items.mapNotNull { (k, v) ->
+            val at = v as? Long ?: return@mapNotNull null
+            if (now - at in 0..maxAgeMs) at to k.removePrefix("pending_") else null
+        }.sortedBy { it.first }.map { it.second }
+        val e = p.edit()
+        items.keys.forEach { e.remove(it) }
+        e.apply()
+        return names
+    }
+
     // 위젯 <-> 매크로 연결
     fun bindWidget(ctx: Context, id: Int, name: String) =
         prefs(ctx).edit().putString("w$id", name).apply()
