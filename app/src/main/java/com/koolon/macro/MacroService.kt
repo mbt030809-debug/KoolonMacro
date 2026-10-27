@@ -32,8 +32,6 @@ class MacroService : AccessibilityService() {
     @Volatile private var recording: StringBuilder? = null
     private var overlay: View? = null
     @Volatile private var quick = false
-    @Volatile private var lastClickAt = 0L
-    @Volatile private var lastEventAt = 0L
     @Volatile private var targetLabel = ""
     private val autoStop = Runnable {
         if (quick) { toast("3분 경과: 녹화 자동 종료"); finishQuickRecord() }
@@ -52,10 +50,6 @@ class MacroService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        if (event != null && event.packageName != packageName) {
-            lastEventAt = System.currentTimeMillis()
-            if (event.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED) lastClickAt = lastEventAt
-        }
         val rec = recording ?: return
         if (running) return // 재생 중 클릭은 기록하지 않음
         if (event == null || event.eventType != AccessibilityEvent.TYPE_VIEW_CLICKED) return
@@ -256,17 +250,6 @@ class MacroService : AccessibilityService() {
                 RunLog.add("화면: " + screenSummary())
                 return false to err
             }
-            if (step is Step.ClickText) {
-                val next = steps.getOrNull(i + 1) as? Step.ClickText
-                if (next != null) {
-                    var m = 0
-                    while (!waitFor(next.text, next.index, 2500) && m < 2) {
-                        m++
-                        RunLog.add("  다음 대상 '${next.text}' 안 보임 → '${step.text}' 다른 방식($m)으로 재클릭")
-                        clickText(step.text, step.index, 40, m)
-                    }
-                }
-            }
             Thread.sleep(STEP_GAP_MS)
         }
         return true to "완료"
@@ -372,28 +355,17 @@ class MacroService : AccessibilityService() {
 
     private fun isVisible(text: String) = findNode(rootInActiveWindow, text) != null
 
-    private fun clickText(text: String, index: Int = 1, retries: Int = 40, method: Int = 0): Boolean {
+    private fun clickText(text: String, index: Int = 1, retries: Int = 40): Boolean {
         repeat(retries) {
-            val first = findNode(rootInActiveWindow, text, index)
-            if (first != null) {
-                // 눌림이 확인될 때까지 최대 3번 누름 (확인: 클릭 이벤트 발생 또는 화면 변화)
-                for (k in 1..MAX_TAPS) {
-                    val nd = if (k == 1) first else (findNode(rootInActiveWindow, text, index) ?: return true)
-                    val beforeClick = lastClickAt
-                    val beforeSig = screenSig()
-                    if (!press(nd, (method + k - 1) % 3)) break
-                    if (confirmed(beforeClick, beforeSig)) return true
-                    RunLog.add("  눌림 확인 안 됨 → 다시 누름 ($k/$MAX_TAPS) '$text'")
-                }
-                return true
-            }
+            val node = findNode(rootInActiveWindow, text, index)
+            if (node != null && press(node)) return true // 확인·재클릭 없이 한 번만 누름
             Thread.sleep(150)
         }
         return false
     }
 
-    /** 노드를 한 번 누름. method 0=라벨 중앙 터치, 1=라벨 위(아이콘 쪽) 터치, 2=접근성 클릭 */
-    private fun press(node: AccessibilityNodeInfo, method: Int = 0): Boolean {
+    /** 노드를 한 번 누름 (웹뷰는 실제 터치, 그 외는 접근성 클릭 우선) */
+    private fun press(node: AccessibilityNodeInfo): Boolean {
         val r = Rect().also { node.getBoundsInScreen(it) }
         var web = false
         var clickable: AccessibilityNodeInfo? = null
@@ -403,65 +375,19 @@ class MacroService : AccessibilityService() {
             if (clickable == null && n.isClickable) clickable = n
             n = n.parent
         }
-        RunLog.add("  누름: method=$method web=$web bounds=$r")
-        if (method == 2) {
-            var c: AccessibilityNodeInfo? = node
-            while (c != null && c.className?.contains("WebView") != true) {
-                if (c.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return true
-                c = c.parent
-            }
-        }
-        if (method == 1 && !r.isEmpty) {
-            val y = (r.exactCenterY() - r.height() * 1.4f).coerceAtLeast(1f)
-            if (tap(r.exactCenterX(), y)) return true
-        }
+        RunLog.add("  누름: web=$web bounds=$r")
         if (web && !r.isEmpty && tap(r.exactCenterX(), r.exactCenterY())) return true
         if (clickable?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true) return true
         return !r.isEmpty && tap(r.exactCenterX(), r.exactCenterY())
     }
 
-    private fun screenSig(): Int {
-        val t = mutableListOf<String>()
-        collectTexts(rootInActiveWindow, t)
-        return t.hashCode()
-    }
-
-    private fun confirmed(beforeClick: Long, beforeSig: Int): Boolean {
-        val end = System.currentTimeMillis() + 900
-        while (System.currentTimeMillis() < end) {
-            if (lastClickAt > beforeClick) return true
-            Thread.sleep(100)
-            if (screenSig() != beforeSig) return true
-        }
-        return lastClickAt > beforeClick
-    }
-
-    /**
-     * 누른 채로 유지하다가 화면 반응(이벤트)이 오면 뗀다. 반응이 없어도 최대 maxHoldMs 후 뗀다.
-     * (웹 버튼은 뗄 때 동작하는 경우가 많아, 눌림 유지 → 반응 확인 → 뗌 순서로 처리)
-     */
-    private fun tap(x: Float, y: Float, minHoldMs: Long = 120, maxHoldMs: Long = 700): Boolean {
-        val down = Path().apply { moveTo(x, y); lineTo(x + 1f, y + 1f) }
-        val first = GestureDescription.StrokeDescription(down, 0, minHoldMs, true)
-        val latch = java.util.concurrent.CountDownLatch(1)
-        val cb = object : GestureResultCallback() {
-            override fun onCompleted(g: GestureDescription?) { latch.countDown() }
-            override fun onCancelled(g: GestureDescription?) { latch.countDown() }
-        }
-        val t0 = lastEventAt
-        if (!dispatchGesture(GestureDescription.Builder().addStroke(first).build(), cb, null)) return false
-        latch.await(1500, java.util.concurrent.TimeUnit.MILLISECONDS)
-        // 누른 상태 유지: 화면 반응이 오면 바로 떼고, 없으면 최대 시간까지
-        val end = System.currentTimeMillis() + maxHoldMs
-        var reacted = false
-        while (System.currentTimeMillis() < end) {
-            if (lastEventAt > t0) { reacted = true; break }
-            Thread.sleep(30)
-        }
-        val up = first.continueStroke(Path().apply { moveTo(x + 1f, y + 1f) }, 0, 40, false)
-        val ok = dispatchGesture(GestureDescription.Builder().addStroke(up).build(), null, null)
-        RunLog.add("  터치 유지 후 뗌 (반응=${if (reacted) "감지" else "없음"})")
-        Thread.sleep(150)
+    /** 고정 시간(holdMs) 동안 누르고 뗌. 확인·재시도 없음 */
+    private fun tap(x: Float, y: Float, holdMs: Long = TOUCH_HOLD_MS): Boolean {
+        val path = Path().apply { moveTo(x, y); lineTo(x + 1f, y + 1f) }
+        val g = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(path, 0, holdMs)).build()
+        val ok = dispatchGesture(g, null, null)
+        Thread.sleep(holdMs + 80)
         return ok
     }
 
@@ -533,6 +459,6 @@ class MacroService : AccessibilityService() {
         const val LAUNCH_WAIT_MS = 600L
         const val STEP_GAP_MS = 200L
         const val MAX_ATTEMPTS = 2
-        const val MAX_TAPS = 3
+        const val TOUCH_HOLD_MS = 250L // 누르는 시간 (너무 길면 롱프레스로 인식)
     }
 }
