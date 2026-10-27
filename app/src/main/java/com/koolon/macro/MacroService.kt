@@ -237,7 +237,7 @@ class MacroService : AccessibilityService() {
             RunLog.add("$n. $step")
             val err: String? = when (step) {
                 is Step.Wait -> { Thread.sleep(step.ms); null }
-                is Step.ClickText -> if (clickText(step.text, step.index)) null else "${n}단계 '${step.text}' @${step.index} 못 찾음"
+                is Step.ClickText -> if (clickText(step.text, step.index, 40, step.touch)) null else "${n}단계 '${step.text}' @${step.index} 못 찾음"
                 is Step.Tap -> if (tap(step.x, step.y)) null else "${n}단계 탭 실패"
                 is Step.Temp -> if (setTemp(step)) null else "${n}단계 온도 ${step.target}도 설정 실패"
                 is Step.StopIf -> if (isVisible(step.text)) return true to "이미 완료됨 ('${step.text}' 확인)" else null
@@ -355,29 +355,35 @@ class MacroService : AccessibilityService() {
 
     private fun isVisible(text: String) = findNode(rootInActiveWindow, text) != null
 
-    private fun clickText(text: String, index: Int = 1, retries: Int = 40): Boolean {
+    private fun clickText(text: String, index: Int = 1, retries: Int = 40, touchOnly: Boolean = false): Boolean {
         repeat(retries) {
             val node = findNode(rootInActiveWindow, text, index)
-            if (node != null && press(node)) return true // 확인·재클릭 없이 한 번만 누름
+            if (node != null && press(node, touchOnly)) return true // 확인·재클릭 없이 한 번만 누름
             Thread.sleep(150)
         }
         return false
     }
 
-    /** 노드를 한 번 누름 (웹뷰는 실제 터치, 그 외는 접근성 클릭 우선) */
-    private fun press(node: AccessibilityNodeInfo): Boolean {
+    /**
+     * 노드를 한 번 누름.
+     * 웹뷰 노드의 좌표(bounds)는 실제 화면 좌표와 어긋나는 경우가 있어(로그: 창 1170폭인데 웹 좌표 2448폭),
+     * 좌표와 무관하게 요소에 직접 클릭을 보내는 접근성 클릭을 우선 사용하고, 안 되면 좌표 터치로 대체한다.
+     */
+    private fun press(node: AccessibilityNodeInfo, touchOnly: Boolean = false): Boolean {
         val r = Rect().also { node.getBoundsInScreen(it) }
-        var web = false
-        var clickable: AccessibilityNodeInfo? = null
-        var n: AccessibilityNodeInfo? = node
-        while (n != null) {
-            if (n.className?.contains("WebView") == true) web = true
-            if (clickable == null && n.isClickable) clickable = n
-            n = n.parent
+        if (!touchOnly) {
+            var c: AccessibilityNodeInfo? = node
+            var depth = 0
+            while (c != null && c.className?.contains("WebView") != true) {
+                if (c.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+                    RunLog.add("  접근성 클릭 성공 (위로 ${depth}단계) bounds=$r")
+                    return true
+                }
+                c = c.parent
+                depth++
+            }
         }
-        RunLog.add("  누름: web=$web bounds=$r")
-        if (web && !r.isEmpty && tap(r.exactCenterX(), r.exactCenterY())) return true
-        if (clickable?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true) return true
+        RunLog.add("  좌표 터치로 대체 bounds=$r")
         return !r.isEmpty && tap(r.exactCenterX(), r.exactCenterY())
     }
 
