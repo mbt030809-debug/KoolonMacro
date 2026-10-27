@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">코오롱 매크로</string>
+    <string name="service_desc">스마트 코오롱 앱 조작 자동화</string>
+</resources>
