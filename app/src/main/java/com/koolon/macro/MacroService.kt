@@ -227,7 +227,6 @@ class MacroService : AccessibilityService() {
         val launch = findTargetApp() ?: return false to "'$TARGET_APP_NAME' 앱을 찾을 수 없음"
         startActivity(launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP))
         Thread.sleep(LAUNCH_WAIT_MS)
-        RunLog.add("앱 실행 후 화면: " + screenSummary())
         for ((i, step) in steps.withIndex()) {
             val n = i + 1
             RunLog.add("$n. $step")
@@ -244,6 +243,13 @@ class MacroService : AccessibilityService() {
                 RunLog.add("실패: $err")
                 RunLog.add("화면: " + screenSummary())
                 return false to err
+            }
+            if (step is Step.ClickText) {
+                val next = steps.getOrNull(i + 1) as? Step.ClickText
+                if (next != null && !waitFor(next.text, next.index, 2500)) {
+                    RunLog.add("  다음 대상 '${next.text}' 안 보여 '${step.text}' 재클릭")
+                    clickText(step.text, step.index)
+                }
             }
             Thread.sleep(STEP_GAP_MS)
         }
@@ -307,9 +313,18 @@ class MacroService : AccessibilityService() {
     private fun findNode(root: AccessibilityNodeInfo?, text: String, index: Int = 1) =
         matches(root, text).getOrNull(index - 1)
 
+    private fun waitFor(text: String, index: Int, ms: Long): Boolean {
+        val end = System.currentTimeMillis() + ms
+        while (System.currentTimeMillis() < end) {
+            if (findNode(rootInActiveWindow, text, index) != null) return true
+            Thread.sleep(150)
+        }
+        return false
+    }
+
     private fun isVisible(text: String) = findNode(rootInActiveWindow, text) != null
 
-    private fun clickText(text: String, index: Int = 1, retries: Int = 10): Boolean {
+    private fun clickText(text: String, index: Int = 1, retries: Int = 40): Boolean {
         repeat(retries) {
             val node = findNode(rootInActiveWindow, text, index)
             if (node != null) {
@@ -328,7 +343,7 @@ class MacroService : AccessibilityService() {
                 if (clickable?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true) return true
                 if (!r.isEmpty && tap(r.exactCenterX(), r.exactCenterY())) return true
             }
-            Thread.sleep(500)
+            Thread.sleep(150)
         }
         return false
     }
@@ -338,7 +353,7 @@ class MacroService : AccessibilityService() {
         val g = GestureDescription.Builder()
             .addStroke(GestureDescription.StrokeDescription(path, 0, 50)).build()
         val ok = dispatchGesture(g, null, null)
-        Thread.sleep(200)
+        Thread.sleep(120)
         return ok
     }
 
@@ -371,8 +386,8 @@ class MacroService : AccessibilityService() {
             val cur = readTemp(s.label) ?: return false
             RunLog.add("  현재 설정 온도 ${cur}")
             if (cur == s.target) return true
-            if (!clickText(if (cur < s.target) s.plus else s.minus, 1, 3)) return false
-            Thread.sleep(400)
+            if (!clickText(if (cur < s.target) s.plus else s.minus, 1, 12)) return false
+            Thread.sleep(250)
         }
         return false
     }
@@ -407,8 +422,8 @@ class MacroService : AccessibilityService() {
         @Volatile var instance: MacroService? = null
 
         const val TARGET_APP_NAME = "코오롱"
-        const val LAUNCH_WAIT_MS = 3000L
-        const val STEP_GAP_MS = 800L
+        const val LAUNCH_WAIT_MS = 600L
+        const val STEP_GAP_MS = 200L
         const val MAX_ATTEMPTS = 2
     }
 }
