@@ -3,6 +3,7 @@ package com.koolon.macro
 /**
  * 스크립트 문법 (한 줄에 한 단계, # 으로 시작하면 주석)
  *   click <글자> [@N]         글자가 포함된 N번째(기본 1) 요소 클릭 (못 찾으면 5초간 재시도)
+ *   icon <글자> [@N]          글자 바로 위의 아이콘을 터치 (라벨이 아니라 아이콘이 눌리는 버튼용)
  *   touch <글자> [@N]         좌표 터치로만 클릭 (click 이 안 먹는 웹 요소용)
  *   tap <x> <y>               좌표 탭
  *   wait <ms>                 대기
@@ -13,7 +14,7 @@ package com.koolon.macro
  */
 sealed class Step {
     data class Wait(val ms: Long) : Step()
-    data class ClickText(val text: String, val index: Int = 1, val touch: Boolean = false) : Step()
+    data class ClickText(val text: String, val index: Int = 1, val touch: Boolean = false, val icon: Boolean = false) : Step()
     data class Tap(val x: Float, val y: Float) : Step()
     data class Temp(val target: Int, val plus: String, val minus: String, val label: String = "") : Step()
     data class StopIf(val text: String) : Step()
@@ -34,11 +35,12 @@ sealed class Step {
                 val a = arg.split(Regex("\\s+"))
                 val step: Step? = when (parts[0].lowercase()) {
                     "wait" -> arg.toLongOrNull()?.let { Wait(it) }
-                    "click", "touch" -> {
+                    "click", "touch", "icon" -> {
                         val touch = parts[0].lowercase() == "touch"
+                        val icon = parts[0].lowercase() == "icon"
                         val m = Regex("^(.*?)\\s+@(\\d+)$").find(arg)
-                        if (m != null) ClickText(m.groupValues[1], m.groupValues[2].toInt().coerceAtLeast(1), touch)
-                        else if (arg.isNotEmpty()) ClickText(arg, 1, touch) else null
+                        if (m != null) ClickText(m.groupValues[1], m.groupValues[2].toInt().coerceAtLeast(1), touch, icon)
+                        else if (arg.isNotEmpty()) ClickText(arg, 1, touch, icon) else null
                     }
                     "stopif" -> if (arg.isNotEmpty()) StopIf(arg) else null
                     "tap" -> {

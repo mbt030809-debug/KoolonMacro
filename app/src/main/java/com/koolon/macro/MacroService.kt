@@ -179,7 +179,7 @@ class MacroService : AccessibilityService() {
                     PixelFormat.TRANSLUCENT,
                 ).apply { gravity = Gravity.TOP or Gravity.START; this.x = (x - size / 2).toInt(); this.y = (y - size / 2).toInt() }
                 wm.addView(dot, lp)
-                ui.postDelayed({ try { wm.removeView(dot) } catch (e: Exception) {} }, 1500)
+                ui.postDelayed({ try { wm.removeView(dot) } catch (e: Exception) {} }, 900)
             } catch (e: Exception) {
             }
         }
@@ -260,7 +260,7 @@ class MacroService : AccessibilityService() {
             RunLog.add("$n. $step")
             val err: String? = when (step) {
                 is Step.Wait -> { Thread.sleep(step.ms); null }
-                is Step.ClickText -> if (clickText(step.text, step.index, 40, step.touch)) null else "${n}단계 '${step.text}' @${step.index} 못 찾음"
+                is Step.ClickText -> if (clickText(step.text, step.index, 40, step.touch, step.icon)) null else "${n}단계 '${step.text}' @${step.index} 못 찾음"
                 is Step.Tap -> if (tap(step.x, step.y)) null else "${n}단계 탭 실패"
                 is Step.Temp -> if (setTemp(step)) null else "${n}단계 온도 ${step.target}도 설정 실패"
                 is Step.StopIf -> if (isVisible(step.text)) return true to "이미 완료됨 ('${step.text}' 확인)" else null
@@ -365,18 +365,18 @@ class MacroService : AccessibilityService() {
         val end = System.currentTimeMillis() + ms
         while (System.currentTimeMillis() < end) {
             if (findNode(rootInActiveWindow, text, index) != null) return true
-            Thread.sleep(150)
+            Thread.sleep(100)
         }
         return false
     }
 
     private fun isVisible(text: String) = findNode(rootInActiveWindow, text) != null
 
-    private fun clickText(text: String, index: Int = 1, retries: Int = 40, touchOnly: Boolean = false): Boolean {
+    private fun clickText(text: String, index: Int = 1, retries: Int = 40, touchOnly: Boolean = false, icon: Boolean = false): Boolean {
         repeat(retries) {
             val node = findNode(rootInActiveWindow, text, index)
-            if (node != null && press(node, touchOnly)) return true // 확인·재클릭 없이 한 번만 누름
-            Thread.sleep(150)
+            if (node != null && press(node, touchOnly, icon)) return true // 확인·재클릭 없이 한 번만 누름
+            Thread.sleep(100)
         }
         return false
     }
@@ -404,7 +404,7 @@ class MacroService : AccessibilityService() {
      * 웹뷰: 실제 터치(제스처)를 앱이 떠 있는 화면(display)으로 보냄. 접근성 클릭은 웹 요소에 반응이 없었음(로그 확인).
      * 그 외: 접근성 클릭 우선.
      */
-    private fun press(node: AccessibilityNodeInfo, touchOnly: Boolean = false): Boolean {
+    private fun press(node: AccessibilityNodeInfo, touchOnly: Boolean = false, icon: Boolean = false): Boolean {
         val r = Rect().also { node.getBoundsInScreen(it) }
         var web = false
         var n: AccessibilityNodeInfo? = node
@@ -413,10 +413,30 @@ class MacroService : AccessibilityService() {
             n = n.parent
         }
         val did = activeDisplayId(node)
-        RunLog.add("  누름: web=$web display=$did bounds=$r")
-        if (!touchOnly && !web && clickChain(node)) return true
-        if (!r.isEmpty && tap(r.exactCenterX(), r.exactCenterY(), TOUCH_HOLD_MS, did)) return true
+        var tx = r.exactCenterX()
+        var ty = r.exactCenterY()
+        if (icon) {
+            val c = iconCenter(node, r)
+            tx = c.first; ty = c.second
+        }
+        RunLog.add("  누름: web=$web display=$did label=$r → 터치 ${tx.toInt()},${ty.toInt()}${if (icon) " (아이콘)" else ""}")
+        if (!touchOnly && !web && !icon && clickChain(node)) return true
+        if (!r.isEmpty && tap(tx, ty, TOUCH_HOLD_MS, did)) return true
         return !touchOnly && clickChain(node)
+    }
+
+    /** 라벨 바로 앞(위)에 있는 형제 노드(아이콘)의 중앙. 없으면 라벨 높이의 1.5배 위 */
+    private fun iconCenter(label: AccessibilityNodeInfo, r: Rect): Pair<Float, Float> {
+        val p = label.parent
+        if (p != null) {
+            val idx = (0 until p.childCount).indexOfFirst { p.getChild(it) == label }
+            for (j in idx - 1 downTo 0) {
+                val sib = p.getChild(j) ?: continue
+                val b = Rect().also { sib.getBoundsInScreen(it) }
+                if (!b.isEmpty && b.height() > r.height()) return Pair(b.exactCenterX(), b.exactCenterY())
+            }
+        }
+        return Pair(r.exactCenterX(), (r.exactCenterY() - r.height() * 1.5f).coerceAtLeast(1f))
     }
 
     private fun clickChain(node: AccessibilityNodeInfo): Boolean {
@@ -433,7 +453,7 @@ class MacroService : AccessibilityService() {
         val path = Path().apply { moveTo(x, y); lineTo(x + 1f, y + 1f) }
         showDot(x, y)
         val ok = dispatchGesture(buildGesture(path, holdMs, displayId), null, null)
-        Thread.sleep(holdMs + 80)
+        Thread.sleep(holdMs + 40)
         return ok
     }
 
@@ -502,9 +522,9 @@ class MacroService : AccessibilityService() {
         @Volatile var instance: MacroService? = null
 
         const val TARGET_APP_NAME = "코오롱"
-        const val LAUNCH_WAIT_MS = 1200L
-        const val STEP_GAP_MS = 200L
+        const val LAUNCH_WAIT_MS = 250L
+        const val STEP_GAP_MS = 80L
         const val MAX_ATTEMPTS = 2
-        const val TOUCH_HOLD_MS = 250L // 누르는 시간 (너무 길면 롱프레스로 인식)
+        const val TOUCH_HOLD_MS = 150L // 누르는 시간 (너무 길면 롱프레스로 인식)
     }
 }
