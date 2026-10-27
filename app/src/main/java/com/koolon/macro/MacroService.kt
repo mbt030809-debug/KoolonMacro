@@ -33,6 +33,7 @@ class MacroService : AccessibilityService() {
     private var overlay: View? = null
     @Volatile private var quick = false
     @Volatile private var lastClickAt = 0L
+    @Volatile private var lastEventAt = 0L
     @Volatile private var targetLabel = ""
     private val autoStop = Runnable {
         if (quick) { toast("3분 경과: 녹화 자동 종료"); finishQuickRecord() }
@@ -51,8 +52,9 @@ class MacroService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        if (event != null && event.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED && event.packageName != packageName) {
-            lastClickAt = System.currentTimeMillis()
+        if (event != null && event.packageName != packageName) {
+            lastEventAt = System.currentTimeMillis()
+            if (event.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED) lastClickAt = lastEventAt
         }
         val rec = recording ?: return
         if (running) return // 재생 중 클릭은 기록하지 않음
@@ -411,7 +413,7 @@ class MacroService : AccessibilityService() {
         }
         if (method == 1 && !r.isEmpty) {
             val y = (r.exactCenterY() - r.height() * 1.4f).coerceAtLeast(1f)
-            if (tap(r.exactCenterX(), y, 130)) return true
+            if (tap(r.exactCenterX(), y)) return true
         }
         if (web && !r.isEmpty && tap(r.exactCenterX(), r.exactCenterY())) return true
         if (clickable?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true) return true
@@ -434,13 +436,32 @@ class MacroService : AccessibilityService() {
         return lastClickAt > beforeClick
     }
 
-    private fun tap(x: Float, y: Float, holdMs: Long = 110): Boolean {
-        // 손가락처럼: 너무 짧지 않게(110ms) 누르고 1px 미세 이동
-        val path = Path().apply { moveTo(x, y); lineTo(x + 1f, y + 1f) }
-        val g = GestureDescription.Builder()
-            .addStroke(GestureDescription.StrokeDescription(path, 0, holdMs)).build()
-        val ok = dispatchGesture(g, null, null)
-        Thread.sleep(holdMs + 60)
+    /**
+     * 누른 채로 유지하다가 화면 반응(이벤트)이 오면 뗀다. 반응이 없어도 최대 maxHoldMs 후 뗀다.
+     * (웹 버튼은 뗄 때 동작하는 경우가 많아, 눌림 유지 → 반응 확인 → 뗌 순서로 처리)
+     */
+    private fun tap(x: Float, y: Float, minHoldMs: Long = 120, maxHoldMs: Long = 700): Boolean {
+        val down = Path().apply { moveTo(x, y); lineTo(x + 1f, y + 1f) }
+        val first = GestureDescription.StrokeDescription(down, 0, minHoldMs, true)
+        val latch = java.util.concurrent.CountDownLatch(1)
+        val cb = object : GestureResultCallback() {
+            override fun onCompleted(g: GestureDescription?) { latch.countDown() }
+            override fun onCancelled(g: GestureDescription?) { latch.countDown() }
+        }
+        val t0 = lastEventAt
+        if (!dispatchGesture(GestureDescription.Builder().addStroke(first).build(), cb, null)) return false
+        latch.await(1500, java.util.concurrent.TimeUnit.MILLISECONDS)
+        // 누른 상태 유지: 화면 반응이 오면 바로 떼고, 없으면 최대 시간까지
+        val end = System.currentTimeMillis() + maxHoldMs
+        var reacted = false
+        while (System.currentTimeMillis() < end) {
+            if (lastEventAt > t0) { reacted = true; break }
+            Thread.sleep(30)
+        }
+        val up = first.continueStroke(Path().apply { moveTo(x + 1f, y + 1f) }, 0, 40, false)
+        val ok = dispatchGesture(GestureDescription.Builder().addStroke(up).build(), null, null)
+        RunLog.add("  터치 유지 후 뗌 (반응=${if (reacted) "감지" else "없음"})")
+        Thread.sleep(150)
         return ok
     }
 
