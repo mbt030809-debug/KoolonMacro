@@ -232,6 +232,10 @@ class MacroService : AccessibilityService() {
         val launch = findTargetApp() ?: return false to "'$TARGET_APP_NAME' 앱을 찾을 수 없음"
         startActivity(launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP))
         Thread.sleep(LAUNCH_WAIT_MS)
+        val dm = resources.displayMetrics
+        RunLog.add("화면 ${dm.widthPixels}x${dm.heightPixels} 창: " + windows.joinToString(" ; ") { w ->
+            "type=${w.type} act=${w.isActive} " + Rect().also { w.getBoundsInScreen(it) }
+        })
         for ((i, step) in steps.withIndex()) {
             val n = i + 1
             RunLog.add("$n. $step")
@@ -252,9 +256,13 @@ class MacroService : AccessibilityService() {
             }
             if (step is Step.ClickText) {
                 val next = steps.getOrNull(i + 1) as? Step.ClickText
-                if (next != null && !waitFor(next.text, next.index, 2500)) {
-                    RunLog.add("  다음 대상 '${next.text}' 안 보여 '${step.text}' 재클릭")
-                    clickText(step.text, step.index)
+                if (next != null) {
+                    var m = 0
+                    while (!waitFor(next.text, next.index, 2500) && m < 2) {
+                        m++
+                        RunLog.add("  다음 대상 '${next.text}' 안 보임 → '${step.text}' 다른 방식($m)으로 재클릭")
+                        clickText(step.text, step.index, 40, m)
+                    }
                 }
             }
             Thread.sleep(STEP_GAP_MS)
@@ -362,7 +370,7 @@ class MacroService : AccessibilityService() {
 
     private fun isVisible(text: String) = findNode(rootInActiveWindow, text) != null
 
-    private fun clickText(text: String, index: Int = 1, retries: Int = 40): Boolean {
+    private fun clickText(text: String, index: Int = 1, retries: Int = 40, method: Int = 0): Boolean {
         repeat(retries) {
             val first = findNode(rootInActiveWindow, text, index)
             if (first != null) {
@@ -371,7 +379,7 @@ class MacroService : AccessibilityService() {
                     val nd = if (k == 1) first else (findNode(rootInActiveWindow, text, index) ?: return true)
                     val beforeClick = lastClickAt
                     val beforeSig = screenSig()
-                    if (!press(nd)) break
+                    if (!press(nd, (method + k - 1) % 3)) break
                     if (confirmed(beforeClick, beforeSig)) return true
                     RunLog.add("  눌림 확인 안 됨 → 다시 누름 ($k/$MAX_TAPS) '$text'")
                 }
@@ -382,8 +390,8 @@ class MacroService : AccessibilityService() {
         return false
     }
 
-    /** 노드를 한 번 누름 (웹뷰는 실제 터치, 그 외는 접근성 클릭 우선) */
-    private fun press(node: AccessibilityNodeInfo): Boolean {
+    /** 노드를 한 번 누름. method 0=라벨 중앙 터치, 1=라벨 위(아이콘 쪽) 터치, 2=접근성 클릭 */
+    private fun press(node: AccessibilityNodeInfo, method: Int = 0): Boolean {
         val r = Rect().also { node.getBoundsInScreen(it) }
         var web = false
         var clickable: AccessibilityNodeInfo? = null
@@ -393,7 +401,18 @@ class MacroService : AccessibilityService() {
             if (clickable == null && n.isClickable) clickable = n
             n = n.parent
         }
-        RunLog.add("  누름: web=$web bounds=$r")
+        RunLog.add("  누름: method=$method web=$web bounds=$r")
+        if (method == 2) {
+            var c: AccessibilityNodeInfo? = node
+            while (c != null && c.className?.contains("WebView") != true) {
+                if (c.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return true
+                c = c.parent
+            }
+        }
+        if (method == 1 && !r.isEmpty) {
+            val y = (r.exactCenterY() - r.height() * 1.4f).coerceAtLeast(1f)
+            if (tap(r.exactCenterX(), y, 130)) return true
+        }
         if (web && !r.isEmpty && tap(r.exactCenterX(), r.exactCenterY())) return true
         if (clickable?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true) return true
         return !r.isEmpty && tap(r.exactCenterX(), r.exactCenterY())
@@ -415,12 +434,13 @@ class MacroService : AccessibilityService() {
         return lastClickAt > beforeClick
     }
 
-    private fun tap(x: Float, y: Float): Boolean {
-        val path = Path().apply { moveTo(x, y) }
+    private fun tap(x: Float, y: Float, holdMs: Long = 110): Boolean {
+        // 손가락처럼: 너무 짧지 않게(110ms) 누르고 1px 미세 이동
+        val path = Path().apply { moveTo(x, y); lineTo(x + 1f, y + 1f) }
         val g = GestureDescription.Builder()
-            .addStroke(GestureDescription.StrokeDescription(path, 0, 50)).build()
+            .addStroke(GestureDescription.StrokeDescription(path, 0, holdMs)).build()
         val ok = dispatchGesture(g, null, null)
-        Thread.sleep(120)
+        Thread.sleep(holdMs + 60)
         return ok
     }
 
