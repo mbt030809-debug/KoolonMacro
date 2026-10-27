@@ -33,7 +33,10 @@ class MainActivity : Activity() {
             val s = MacroService.instance
             if (s == null) toast("접근성 서비스가 꺼져 있음") else s.beginQuickRecord()
         })
-        root.addView(btn("접근성 설정 열기") { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) })
+        root.addView(btn("① 앱 정보 열기 (⋮ → 제한된 설정 허용)") {
+            startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
+        })
+        root.addView(btn("② 접근성 설정 열기") { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) })
         root.addView(btn("권한 요청 (알림·위치)") { requestPerms() })
         root.addView(btn("위치 '항상 허용' 설정 열기") {
             startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
