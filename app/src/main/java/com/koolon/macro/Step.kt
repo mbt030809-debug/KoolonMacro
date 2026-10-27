@@ -8,6 +8,7 @@ package com.koolon.macro
  *   wait <ms>                 대기
  *   temp <목표> <+글자> <-글자> [기준글자]  기준글자(예: 설정 온도) 다음에 나오는 온도를 읽어 목표까지 +/- 클릭
  *   stopif <글자>             글자가 화면에 있으면 "이미 완료"로 종료
+ *   kill                      최근 앱 화면에서 현재 앱을 밀어서 종료 (실행 후 자동 종료가 켜져 있으면 생략 가능)
  *   home / back               홈 / 뒤로
  */
 sealed class Step {
@@ -18,6 +19,7 @@ sealed class Step {
     data class StopIf(val text: String) : Step()
     object Home : Step()
     object Back : Step()
+    object Kill : Step()
 
     companion object {
         /** @return (단계 목록, 오류 줄 목록) */
@@ -50,6 +52,7 @@ sealed class Step {
                     }
                     "home" -> Home
                     "back" -> Back
+                    "kill" -> Kill
                     else -> null
                 }
                 if (step == null) errors.add("${i + 1}행: $raw") else steps.add(step)

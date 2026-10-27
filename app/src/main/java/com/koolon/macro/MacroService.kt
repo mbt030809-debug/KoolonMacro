@@ -212,7 +212,11 @@ class MacroService : AccessibilityService() {
         var last = ""
         for (attempt in 1..MAX_ATTEMPTS) {
             val (ok, msg) = attempt(steps)
-            if (ok) { report(name, msg); return }
+            if (ok) {
+                if (MacroStore.autoClose(this) && steps.lastOrNull() != Step.Kill) killApp()
+                report(name, msg)
+                return
+            }
             last = msg
             if (attempt < MAX_ATTEMPTS) {
                 performGlobalAction(GLOBAL_ACTION_HOME)
@@ -238,6 +242,7 @@ class MacroService : AccessibilityService() {
                 is Step.StopIf -> if (isVisible(step.text)) return true to "이미 완료됨 ('${step.text}' 확인)" else null
                 Step.Home -> { performGlobalAction(GLOBAL_ACTION_HOME); null }
                 Step.Back -> { performGlobalAction(GLOBAL_ACTION_BACK); null }
+                Step.Kill -> { killApp(); null }
             }
             if (err != null) {
                 RunLog.add("실패: $err")
@@ -312,6 +317,24 @@ class MacroService : AccessibilityService() {
 
     private fun findNode(root: AccessibilityNodeInfo?, text: String, index: Int = 1) =
         matches(root, text).getOrNull(index - 1)
+
+    /** 최근 앱 화면을 열어 현재 앱 카드를 위로 밀어 종료한 뒤 홈으로 */
+    private fun killApp() {
+        RunLog.add("앱 종료: 최근 앱에서 밀어내기")
+        performGlobalAction(GLOBAL_ACTION_RECENTS)
+        Thread.sleep(900)
+        val dm = resources.displayMetrics
+        val path = Path().apply {
+            moveTo(dm.widthPixels / 2f, dm.heightPixels * 0.55f)
+            lineTo(dm.widthPixels / 2f, dm.heightPixels * 0.05f)
+        }
+        dispatchGesture(
+            GestureDescription.Builder().addStroke(GestureDescription.StrokeDescription(path, 0, 160)).build(),
+            null, null,
+        )
+        Thread.sleep(500)
+        performGlobalAction(GLOBAL_ACTION_HOME)
+    }
 
     private fun waitFor(text: String, index: Int, ms: Long): Boolean {
         val end = System.currentTimeMillis() + ms

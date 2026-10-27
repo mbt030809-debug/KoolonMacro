@@ -66,6 +66,17 @@ class MainActivity : Activity() {
             toast("'${MacroStore.SAMPLE_NAME}' 생성됨. 목록에서 ▶ 실행")
             onResume()
         })
+        root.addView(btn("+ 예시 만들기: 안방 외출 (난방 → 외출)") {
+            MacroStore.save(this, Macro(MacroStore.SAMPLE2_NAME, MacroStore.SAMPLE2_SCRIPT))
+            Shortcuts.update(this)
+            toast("'${MacroStore.SAMPLE2_NAME}' 생성됨. 목록에서 ▶ 실행")
+            onResume()
+        })
+        root.addView(android.widget.CheckBox(this).apply {
+            text = "실행 후 앱 자동 종료 (최근 앱에서 밀어내기)"
+            isChecked = MacroStore.autoClose(this@MainActivity)
+            setOnCheckedChangeListener { _, v -> MacroStore.setAutoClose(this@MainActivity, v) }
+        })
         root.addView(btn("+ 새 매크로") { startActivity(Intent(this, EditActivity::class.java)) })
         list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         root.addView(list)
