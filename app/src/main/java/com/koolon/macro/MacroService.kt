@@ -33,6 +33,7 @@ class MacroService : AccessibilityService() {
     private var watcher: LocationWatcher? = null
     private var overlay: View? = null
     @Volatile private var quick = false
+    @Volatile private var targetLabel = ""
     private val autoStop = Runnable {
         if (quick) { toast("3분 경과: 녹화 자동 종료"); finishQuickRecord() }
     }
@@ -296,7 +297,9 @@ class MacroService : AccessibilityService() {
         val pm = packageManager
         val q = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
         val match = pm.queryIntentActivities(q, PackageManager.MATCH_ALL)
-            .firstOrNull { it.loadLabel(pm).toString().contains(TARGET_APP_NAME) } ?: return null
+            .firstOrNull { it.activityInfo.packageName != packageName && it.loadLabel(pm).toString().contains(TARGET_APP_NAME) }
+            ?: return null
+        targetLabel = match.loadLabel(pm).toString()
         return pm.getLaunchIntentForPackage(match.activityInfo.packageName)
     }
 
@@ -318,15 +321,27 @@ class MacroService : AccessibilityService() {
     private fun findNode(root: AccessibilityNodeInfo?, text: String, index: Int = 1) =
         matches(root, text).getOrNull(index - 1)
 
-    /** 최근 앱 화면을 열어 현재 앱 카드를 위로 밀어 종료한 뒤 홈으로 */
+    /** 최근 앱 화면에서 대상 앱 카드(이름으로 식별)를 위로 밀어 종료. 못 찾으면 아무것도 닫지 않음 */
     private fun killApp() {
-        RunLog.add("앱 종료: 최근 앱에서 밀어내기")
         performGlobalAction(GLOBAL_ACTION_RECENTS)
         Thread.sleep(900)
+        val label = targetLabel.ifBlank { TARGET_APP_NAME }
+        val card = findNode(rootInActiveWindow, label)
+        if (card == null) {
+            RunLog.add("앱 종료 생략: 최근 앱에서 '$label' 카드를 못 찾음")
+            RunLog.add("최근 앱 화면: " + screenSummary())
+            performGlobalAction(GLOBAL_ACTION_HOME)
+            return
+        }
         val dm = resources.displayMetrics
+        val h = dm.heightPixels.toFloat()
+        val r = Rect().also { card.getBoundsInScreen(it) }
+        val x = r.exactCenterX()
+        val startY = if (r.height() > h * 0.4f) r.exactCenterY() else minOf(r.bottom + h * 0.3f, h * 0.85f)
+        RunLog.add("앱 종료: '$label' 카드 위로 밀기 x=${x.toInt()} y=${startY.toInt()}")
         val path = Path().apply {
-            moveTo(dm.widthPixels / 2f, dm.heightPixels * 0.55f)
-            lineTo(dm.widthPixels / 2f, dm.heightPixels * 0.05f)
+            moveTo(x, startY)
+            lineTo(x, maxOf(startY - h * 0.6f, 5f))
         }
         dispatchGesture(
             GestureDescription.Builder().addStroke(GestureDescription.StrokeDescription(path, 0, 160)).build(),
