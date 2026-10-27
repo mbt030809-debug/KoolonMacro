@@ -40,7 +40,7 @@ class MacroService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         val rec = recording ?: return
         if (event == null || event.eventType != AccessibilityEvent.TYPE_VIEW_CLICKED) return
-        if (event.packageName == packageName) return
+        if (event.packageName == packageName || event.packageName == "com.android.systemui") return
         val src = event.source
         val label = listOf(
             event.text.joinToString(" "),
@@ -71,6 +71,27 @@ class MacroService : AccessibilityService() {
     fun startRecording() { recording = StringBuilder() }
     fun stopRecording(): String = (recording?.toString() ?: "").also { recording = null }
     val isRecording get() = recording != null
+    /** 앱을 켜고 녹화 시작. 알림의 종료 버튼 or 이 앱으로 복귀하면 자동 저장 */
+    fun beginQuickRecord() {
+        val launch = findTargetApp()
+        if (launch == null) { toast("'$TARGET_APP_NAME' 앱을 찾을 수 없음"); return }
+        startRecording()
+        Notifier.recording(this)
+        startActivity(launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP))
+        toast("녹화 중: 평소처럼 조작하세요. 끝나면 알림의 '녹화 종료' 누르기")
+    }
+
+    fun finishQuickRecord() {
+        if (!isRecording) return
+        val script = stopRecording()
+        Notifier.cancelRecording(this)
+        if (script.isBlank()) { toast("기록된 동작이 없음"); return }
+        val name = "녹화 " + java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.KOREA).format(java.util.Date())
+        MacroStore.save(this, Macro(name, script))
+        Shortcuts.update(this)
+        report(name, "저장됨 (${script.lines().count { it.isNotBlank() }}단계). 앱에서 확인 후 위젯 추가")
+    }
+
     fun refreshLocation() { watcher?.start() }
 
     private fun toast(msg: String) = ui.post { Toast.makeText(this, msg, Toast.LENGTH_LONG).show() }

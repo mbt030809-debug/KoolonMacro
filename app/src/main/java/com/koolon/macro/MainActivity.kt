@@ -29,6 +29,10 @@ class MainActivity : Activity() {
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(pad, pad, pad, pad) }
         status = TextView(this)
         root.addView(status)
+        root.addView(btn("⏺ 녹화: 내가 하는 동작 따라하기") {
+            val s = MacroService.instance
+            if (s == null) toast("접근성 서비스가 꺼져 있음") else s.beginQuickRecord()
+        })
         root.addView(btn("접근성 설정 열기") { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) })
         root.addView(btn("권한 요청 (알림·위치)") { requestPerms() })
         root.addView(btn("위치 '항상 허용' 설정 열기") {
@@ -50,6 +54,7 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        MacroService.instance?.finishQuickRecord()
         status.text = "접근성: " + (if (MacroService.instance != null) "켜짐" else "꺼짐") +
             "\n집 위치: " + (if (MacroStore.home(this) != null) "저장됨" else "미설정")
         list.removeAllViews()
