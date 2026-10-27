@@ -8,7 +8,15 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Color
 import android.graphics.Path
+import android.graphics.PixelFormat
+import android.graphics.drawable.GradientDrawable
+import android.view.Gravity
+import android.view.MotionEvent
+import android.view.View
+import android.view.WindowManager
+import android.widget.TextView
 import android.graphics.Rect
 import android.os.Handler
 import android.os.Looper
@@ -23,6 +31,7 @@ class MacroService : AccessibilityService() {
     @Volatile private var running = false
     @Volatile private var recording: StringBuilder? = null
     private var watcher: LocationWatcher? = null
+    private var overlay: View? = null
 
     override fun onServiceConnected() {
         instance = this
@@ -34,6 +43,7 @@ class MacroService : AccessibilityService() {
     override fun onUnbind(intent: Intent?): Boolean {
         instance = null
         watcher?.stop()
+        hideOverlay()
         return super.onUnbind(intent)
     }
 
@@ -77,19 +87,70 @@ class MacroService : AccessibilityService() {
         if (launch == null) { toast("'$TARGET_APP_NAME' 앱을 찾을 수 없음"); return }
         startRecording()
         Notifier.recording(this)
+        showOverlay()
         startActivity(launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP))
-        toast("녹화 중: 평소처럼 조작하세요. 끝나면 알림의 '녹화 종료' 누르기")
+        toast("녹화 중: 평소처럼 조작하세요. 끝나면 화면의 빨간 '녹화 종료' 버튼 누르기")
     }
 
     fun finishQuickRecord() {
         if (!isRecording) return
         val script = stopRecording()
         Notifier.cancelRecording(this)
+        hideOverlay()
         if (script.isBlank()) { toast("기록된 동작이 없음"); return }
         val name = "녹화 " + java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.KOREA).format(java.util.Date())
         MacroStore.save(this, Macro(name, script))
         Shortcuts.update(this)
         report(name, "저장됨 (${script.lines().count { it.isNotBlank() }}단계). 앱에서 확인 후 위젯 추가")
+    }
+
+    /** 다른 앱 위에 뜨는 드래그 가능한 종료 버튼 (접근성 오버레이: 별도 권한 불필요) */
+    private fun showOverlay() = ui.post {
+        if (overlay != null) return@post
+        val wm = getSystemService(WindowManager::class.java)
+        val tv = TextView(this).apply {
+            text = "⏹ 녹화 종료"
+            setTextColor(Color.WHITE)
+            textSize = 15f
+            setPadding(44, 26, 44, 26)
+            background = GradientDrawable().apply { setColor(0xE6D32F2F.toInt()); cornerRadius = 100f }
+        }
+        val lp = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            PixelFormat.TRANSLUCENT,
+        ).apply { gravity = Gravity.TOP or Gravity.START; x = 40; y = 220 }
+        var sx = 0f; var sy = 0f; var ox = 0; var oy = 0; var moved = false
+        tv.setOnTouchListener { _, e ->
+            when (e.action) {
+                MotionEvent.ACTION_DOWN -> { sx = e.rawX; sy = e.rawY; ox = lp.x; oy = lp.y; moved = false; true }
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = e.rawX - sx; val dy = e.rawY - sy
+                    if (Math.abs(dx) > 12 || Math.abs(dy) > 12) moved = true
+                    lp.x = ox + dx.toInt(); lp.y = oy + dy.toInt()
+                    wm.updateViewLayout(tv, lp)
+                    true
+                }
+                MotionEvent.ACTION_UP -> { if (!moved) finishQuickRecord(); true }
+                else -> false
+            }
+        }
+        try {
+            wm.addView(tv, lp)
+            overlay = tv
+        } catch (e: Exception) {
+        }
+    }
+
+    private fun hideOverlay() = ui.post {
+        overlay?.let {
+            try {
+                getSystemService(WindowManager::class.java).removeView(it)
+            } catch (e: Exception) {
+            }
+        }
+        overlay = null
     }
 
     fun refreshLocation() { watcher?.start() }
