@@ -18,6 +18,7 @@ import android.view.View
 import android.view.WindowManager
 import android.widget.TextView
 import android.graphics.Rect
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
@@ -230,7 +231,7 @@ class MacroService : AccessibilityService() {
         Thread.sleep(LAUNCH_WAIT_MS)
         val dm = resources.displayMetrics
         RunLog.add("화면 ${dm.widthPixels}x${dm.heightPixels} 창: " + windows.joinToString(" ; ") { w ->
-            "type=${w.type} act=${w.isActive} " + Rect().also { w.getBoundsInScreen(it) }
+            "type=${w.type} act=${w.isActive} d=${if (Build.VERSION.SDK_INT >= 34) w.displayId else -1} " + Rect().also { w.getBoundsInScreen(it) }
         })
         for ((i, step) in steps.withIndex()) {
             val n = i + 1
@@ -277,10 +278,7 @@ class MacroService : AccessibilityService() {
                 moveTo(dm.widthPixels / 2f, dm.heightPixels * 0.85f)
                 lineTo(dm.widthPixels / 2f, dm.heightPixels * 0.2f)
             }
-            dispatchGesture(
-                GestureDescription.Builder().addStroke(GestureDescription.StrokeDescription(path, 0, 300)).build(),
-                null, null,
-            )
+            dispatchGesture(buildGesture(path, 300, activeDisplayId()), null, null)
             Thread.sleep(1200)
         }
         return true
@@ -336,10 +334,7 @@ class MacroService : AccessibilityService() {
             moveTo(x, startY)
             lineTo(x, maxOf(startY - h * 0.6f, 5f))
         }
-        dispatchGesture(
-            GestureDescription.Builder().addStroke(GestureDescription.StrokeDescription(path, 0, 160)).build(),
-            null, null,
-        )
+        dispatchGesture(buildGesture(path, 160, activeDisplayId()), null, null)
         Thread.sleep(500)
         performGlobalAction(GLOBAL_ACTION_HOME)
     }
@@ -364,35 +359,57 @@ class MacroService : AccessibilityService() {
         return false
     }
 
+    /** 지금 앱이 떠 있는 화면(display) id. 폴더블의 커버/메인 화면이 다르면 제스처를 그 화면으로 보내야 함 */
+    private fun activeDisplayId(node: AccessibilityNodeInfo? = null): Int {
+        if (Build.VERSION.SDK_INT >= 34) {
+            try {
+                return (node?.window ?: rootInActiveWindow?.window)?.displayId ?: 0
+            } catch (e: Exception) {
+            }
+        }
+        return 0
+    }
+
+    private fun buildGesture(path: Path, durationMs: Long, displayId: Int): GestureDescription {
+        val b = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(path, 0, durationMs))
+        if (Build.VERSION.SDK_INT >= 32) b.setDisplayId(displayId)
+        return b.build()
+    }
+
     /**
-     * 노드를 한 번 누름.
-     * 웹뷰 노드의 좌표(bounds)는 실제 화면 좌표와 어긋나는 경우가 있어(로그: 창 1170폭인데 웹 좌표 2448폭),
-     * 좌표와 무관하게 요소에 직접 클릭을 보내는 접근성 클릭을 우선 사용하고, 안 되면 좌표 터치로 대체한다.
+     * 노드를 한 번 누름 (확인·재클릭 없음).
+     * 웹뷰: 실제 터치(제스처)를 앱이 떠 있는 화면(display)으로 보냄. 접근성 클릭은 웹 요소에 반응이 없었음(로그 확인).
+     * 그 외: 접근성 클릭 우선.
      */
     private fun press(node: AccessibilityNodeInfo, touchOnly: Boolean = false): Boolean {
         val r = Rect().also { node.getBoundsInScreen(it) }
-        if (!touchOnly) {
-            var c: AccessibilityNodeInfo? = node
-            var depth = 0
-            while (c != null && c.className?.contains("WebView") != true) {
-                if (c.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
-                    RunLog.add("  접근성 클릭 성공 (위로 ${depth}단계) bounds=$r")
-                    return true
-                }
-                c = c.parent
-                depth++
-            }
+        var web = false
+        var n: AccessibilityNodeInfo? = node
+        while (n != null) {
+            if (n.className?.contains("WebView") == true) web = true
+            n = n.parent
         }
-        RunLog.add("  좌표 터치로 대체 bounds=$r")
-        return !r.isEmpty && tap(r.exactCenterX(), r.exactCenterY())
+        val did = activeDisplayId(node)
+        RunLog.add("  누름: web=$web display=$did bounds=$r")
+        if (!touchOnly && !web && clickChain(node)) return true
+        if (!r.isEmpty && tap(r.exactCenterX(), r.exactCenterY(), TOUCH_HOLD_MS, did)) return true
+        return !touchOnly && clickChain(node)
+    }
+
+    private fun clickChain(node: AccessibilityNodeInfo): Boolean {
+        var c: AccessibilityNodeInfo? = node
+        while (c != null && c.className?.contains("WebView") != true) {
+            if (c.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return true
+            c = c.parent
+        }
+        return false
     }
 
     /** 고정 시간(holdMs) 동안 누르고 뗌. 확인·재시도 없음 */
-    private fun tap(x: Float, y: Float, holdMs: Long = TOUCH_HOLD_MS): Boolean {
+    private fun tap(x: Float, y: Float, holdMs: Long = TOUCH_HOLD_MS, displayId: Int = activeDisplayId()): Boolean {
         val path = Path().apply { moveTo(x, y); lineTo(x + 1f, y + 1f) }
-        val g = GestureDescription.Builder()
-            .addStroke(GestureDescription.StrokeDescription(path, 0, holdMs)).build()
-        val ok = dispatchGesture(g, null, null)
+        val ok = dispatchGesture(buildGesture(path, holdMs, displayId), null, null)
         Thread.sleep(holdMs + 80)
         return ok
     }
