@@ -18,7 +18,7 @@ class EditActivity : Activity() {
 
     private lateinit var nameEt: EditText
     private lateinit var scriptEt: EditText
-    private lateinit var arriveCb: CheckBox
+    private val dayCbs = mutableListOf<CheckBox>()
     private lateinit var timeBtn: Button
     private lateinit var recBtn: Button
     private var time: String? = null
@@ -62,11 +62,14 @@ class EditActivity : Activity() {
             setOnLongClickListener { time = null; refreshTime(); true }
         }
         root.addView(timeBtn)
-        arriveCb = CheckBox(this).apply {
-            text = "집 근처 도착 시 자동 실행"
-            isChecked = m?.arrive ?: false
+        val dayRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val days = m?.days ?: 127
+        listOf("월", "화", "수", "목", "금", "토", "일").forEachIndexed { i, label ->
+            val cb = CheckBox(this).apply { text = label; isChecked = days and (1 shl i) != 0 }
+            dayCbs.add(cb)
+            dayRow.addView(cb)
         }
-        root.addView(arriveCb)
+        root.addView(dayRow)
         recBtn = Button(this).apply { setOnClickListener { toggleRecord() } }
         root.addView(recBtn)
         root.addView(btn("테스트 실행") {
@@ -88,7 +91,7 @@ class EditActivity : Activity() {
     private fun toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
 
     private fun refreshTime() {
-        timeBtn.text = "⏰ 매일 실행 시각: " + (time ?: "없음") + " (길게 눌러 해제)"
+        timeBtn.text = "⏰ 실행 시각(선택한 요일): " + (time ?: "없음") + " (길게 눌러 해제)"
     }
 
     private fun refreshRec() {
@@ -110,7 +113,7 @@ class EditActivity : Activity() {
         refreshRec()
     }
 
-    private fun current(name: String) = Macro(name, scriptEt.text.toString(), time, arriveCb.isChecked)
+    private fun current(name: String) = Macro(name, scriptEt.text.toString(), time, dayCbs.withIndex().sumOf { (i, c) -> if (c.isChecked) 1 shl i else 0 })
 
     private fun save() {
         val name = nameEt.text.toString().trim()

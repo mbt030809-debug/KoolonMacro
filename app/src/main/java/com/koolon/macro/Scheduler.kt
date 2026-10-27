@@ -26,13 +26,20 @@ object Scheduler {
         if (m == null) return
         cancel(ctx, m.name)
         val hm = m.time?.split(":") ?: return
-        val cal = Calendar.getInstance().apply {
-            set(Calendar.HOUR_OF_DAY, hm[0].toInt())
-            set(Calendar.MINUTE, hm[1].toInt())
-            set(Calendar.SECOND, 0)
-            set(Calendar.MILLISECOND, 0)
-            if (timeInMillis <= System.currentTimeMillis()) add(Calendar.DAY_OF_YEAR, 1)
+        if (m.days and 127 == 0) return
+        val cal = Calendar.getInstance()
+        var found = false
+        for (d in 0..7) {
+            cal.timeInMillis = System.currentTimeMillis()
+            cal.add(Calendar.DAY_OF_YEAR, d)
+            cal.set(Calendar.HOUR_OF_DAY, hm[0].toInt())
+            cal.set(Calendar.MINUTE, hm[1].toInt())
+            cal.set(Calendar.SECOND, 0)
+            cal.set(Calendar.MILLISECOND, 0)
+            val bit = 1 shl ((cal.get(Calendar.DAY_OF_WEEK) + 5) % 7) // 월=0 … 일=6
+            if (cal.timeInMillis > System.currentTimeMillis() && m.days and bit != 0) { found = true; break }
         }
+        if (!found) return
         val am = ctx.getSystemService(AlarmManager::class.java)
         val exact = Build.VERSION.SDK_INT < 31 || am.canScheduleExactAlarms()
         if (exact) am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, cal.timeInMillis, pi(ctx, m.name))

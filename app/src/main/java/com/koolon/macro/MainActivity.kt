@@ -1,6 +1,7 @@
 package com.koolon.macro
 
 import android.Manifest
+import android.app.AlarmManager
 import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -38,11 +39,7 @@ class MainActivity : Activity() {
             startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
         })
         root.addView(btn("② 접근성 설정 열기") { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) })
-        root.addView(btn("권한 요청 (알림·위치)") { requestPerms() })
-        root.addView(btn("위치 '항상 허용' 설정 열기") {
-            startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
-        })
-        root.addView(btn("현재 위치를 집으로 저장") { saveHome() })
+        root.addView(btn("권한 요청 (알림·정확한 알람)") { requestPerms() })
         root.addView(btn("화면 덤프 (5초 후 클립보드 복사)") {
             val s = MacroService.instance
             if (s == null) toast("접근성 서비스가 꺼져 있음") else {
@@ -89,14 +86,14 @@ class MainActivity : Activity() {
         @Suppress("DEPRECATION")
         val build = packageManager.getPackageInfo(packageName, 0).versionCode
         status.text = "빌드 #$build\n접근성: " + (if (MacroService.instance != null) "켜짐" else "꺼짐") +
-            "\n집 위치: " + (if (MacroStore.home(this) != null) "저장됨" else "미설정")
+            "\n정확한 알람: " + (if (Build.VERSION.SDK_INT < 31 || getSystemService(AlarmManager::class.java).canScheduleExactAlarms()) "허용" else "불허 (예약 시각이 늦을 수 있음)")
         logView.text = RunLog.text().takeLast(500)
         list.removeAllViews()
         MacroStore.all(this).forEach { m ->
             val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
             row.addView(
                 TextView(this).apply {
-                    text = m.name + (m.time?.let { "  ⏰$it" } ?: "") + (if (m.arrive) "  📍" else "")
+                    text = m.name + (m.time?.let { "  ⏰$it" } ?: "") + (if (m.time != null) daysLabel(m.days) else "")
                     textSize = 16f
                 }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f),
             )
@@ -118,33 +115,16 @@ class MainActivity : Activity() {
 
     private fun toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
 
+    private fun daysLabel(d: Int): String =
+        if (d and 127 == 127) "" else " (" + listOf("월", "화", "수", "목", "금", "토", "일")
+            .filterIndexed { i, _ -> d and (1 shl i) != 0 }.joinToString("") + ")"
+
     private fun requestPerms() {
-        val p = mutableListOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
-        if (Build.VERSION.SDK_INT >= 33) p.add(Manifest.permission.POST_NOTIFICATIONS)
-        requestPermissions(p.toTypedArray(), 1)
-        toast("집 도착 트리거를 쓰려면 위치를 '항상 허용'으로 바꿔야 함")
-    }
-
-    override fun onRequestPermissionsResult(code: Int, perms: Array<out String>, results: IntArray) {
-        super.onRequestPermissionsResult(code, perms, results)
-        MacroService.instance?.refreshLocation()
-    }
-
-    private fun saveHome() {
-        if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-            toast("먼저 '권한 요청'을 누르세요"); return
-        }
-        val lm = getSystemService(LocationManager::class.java)
-        val loc = listOf(LocationManager.NETWORK_PROVIDER, LocationManager.GPS_PROVIDER)
-            .mapNotNull { try { lm.getLastKnownLocation(it) } catch (e: Exception) { null } }
-            .maxByOrNull { it.time }
-        if (loc == null) {
-            toast("위치를 못 얻음: 지도 앱에서 현재 위치를 한 번 갱신한 뒤 재시도")
-        } else {
-            MacroStore.setHome(this, loc.latitude, loc.longitude)
-            MacroService.instance?.refreshLocation()
-            toast("집 위치 저장됨 (반경 ${LocationWatcher.RADIUS_M.toInt()}m)")
-            onResume()
+        if (Build.VERSION.SDK_INT >= 33) requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
+        if (Build.VERSION.SDK_INT >= 31 && !getSystemService(AlarmManager::class.java).canScheduleExactAlarms()) {
+            startActivity(
+                Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, Uri.parse("package:$packageName")),
+            )
         }
     }
 }

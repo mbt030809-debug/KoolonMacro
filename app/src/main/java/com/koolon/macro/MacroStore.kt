@@ -10,7 +10,8 @@ data class Macro(
     /** 매일 실행 시각 "HH:mm", 없으면 null */
     val time: String? = null,
     /** 집 근처 도착 시 실행 */
-    val arrive: Boolean = false,
+    /** 요일 비트마스크 (월=1, 화=2, … 일=64), 기본 매일 */
+    val days: Int = 127,
 )
 
 object MacroStore {
@@ -41,7 +42,7 @@ object MacroStore {
                 o.getString("name"),
                 o.getString("script"),
                 if (o.isNull("time")) null else o.getString("time"),
-                o.optBoolean("arrive", false),
+                o.optInt("days", 127),
             )
         }
     }
@@ -60,7 +61,7 @@ object MacroStore {
         val arr = JSONArray()
         list.forEach {
             arr.put(JSONObject().put("name", it.name).put("script", it.script)
-                .put("time", it.time ?: JSONObject.NULL).put("arrive", it.arrive))
+                .put("time", it.time ?: JSONObject.NULL).put("days", it.days))
         }
         prefs(ctx).edit().putString("macros", arr.toString()).apply()
     }
@@ -72,11 +73,4 @@ object MacroStore {
     fun widgetMacro(ctx: Context, id: Int): String? = prefs(ctx).getString("w$id", null)
 
     fun unbindWidget(ctx: Context, id: Int) = prefs(ctx).edit().remove("w$id").apply()
-
-    // 집 위치
-    fun setHome(ctx: Context, lat: Double, lon: Double) =
-        prefs(ctx).edit().putString("home", "$lat,$lon").apply()
-
-    fun home(ctx: Context): Pair<Double, Double>? =
-        prefs(ctx).getString("home", null)?.split(",")?.let { it[0].toDouble() to it[1].toDouble() }
 }

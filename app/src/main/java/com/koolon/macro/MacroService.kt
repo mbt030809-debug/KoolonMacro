@@ -30,7 +30,6 @@ class MacroService : AccessibilityService() {
     private val ui = Handler(Looper.getMainLooper())
     @Volatile private var running = false
     @Volatile private var recording: StringBuilder? = null
-    private var watcher: LocationWatcher? = null
     private var overlay: View? = null
     @Volatile private var quick = false
     @Volatile private var targetLabel = ""
@@ -40,14 +39,12 @@ class MacroService : AccessibilityService() {
 
     override fun onServiceConnected() {
         instance = this
-        watcher = LocationWatcher(this).also { it.start() }
         Scheduler.rescheduleAll(this)
         Shortcuts.update(this)
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
         instance = null
-        watcher?.stop()
         hideOverlay()
         return super.onUnbind(intent)
     }
@@ -175,7 +172,6 @@ class MacroService : AccessibilityService() {
         overlay = null
     }
 
-    fun refreshLocation() { watcher?.start() }
 
     private fun toast(msg: String) = ui.post { Toast.makeText(this, msg, Toast.LENGTH_LONG).show() }
 
