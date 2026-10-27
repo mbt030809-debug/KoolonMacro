@@ -60,6 +60,12 @@ class MainActivity : Activity() {
         })
         logView = TextView(this).apply { textSize = 11f }
         root.addView(logView)
+        root.addView(btn("+ 예시 만들기: 안방 난방 26도") {
+            MacroStore.save(this, Macro(MacroStore.SAMPLE_NAME, MacroStore.SAMPLE_SCRIPT))
+            Shortcuts.update(this)
+            toast("'${MacroStore.SAMPLE_NAME}' 생성됨. 목록에서 ▶ 실행")
+            onResume()
+        })
         root.addView(btn("+ 새 매크로") { startActivity(Intent(this, EditActivity::class.java)) })
         list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         root.addView(list)

@@ -5,7 +5,7 @@ package com.koolon.macro
  *   click <글자> [@N]         글자가 포함된 N번째(기본 1) 요소 클릭 (못 찾으면 5초간 재시도)
  *   tap <x> <y>               좌표 탭
  *   wait <ms>                 대기
- *   temp <목표> <+글자> <-글자>  현재 온도를 읽어 목표 온도까지 +/- 버튼 클릭
+ *   temp <목표> <+글자> <-글자> [기준글자]  기준글자(예: 설정 온도) 다음에 나오는 온도를 읽어 목표까지 +/- 클릭
  *   stopif <글자>             글자가 화면에 있으면 "이미 완료"로 종료
  *   home / back               홈 / 뒤로
  */
@@ -13,7 +13,7 @@ sealed class Step {
     data class Wait(val ms: Long) : Step()
     data class ClickText(val text: String, val index: Int = 1) : Step()
     data class Tap(val x: Float, val y: Float) : Step()
-    data class Temp(val target: Int, val plus: String, val minus: String) : Step()
+    data class Temp(val target: Int, val plus: String, val minus: String, val label: String = "") : Step()
     data class StopIf(val text: String) : Step()
     object Home : Step()
     object Back : Step()
@@ -44,7 +44,7 @@ sealed class Step {
                     }
                     "temp" -> {
                         val t = a.getOrNull(0)?.toIntOrNull()
-                        if (t != null && a.size >= 3) Temp(t, a[1], a[2]) else null
+                        if (t != null && a.size >= 3) Temp(t, a[1], a[2], a.drop(3).joinToString(" ")) else null
                     }
                     "home" -> Home
                     "back" -> Back

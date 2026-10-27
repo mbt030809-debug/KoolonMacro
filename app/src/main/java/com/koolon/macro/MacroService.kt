@@ -343,11 +343,13 @@ class MacroService : AccessibilityService() {
     }
 
     // ---- 온도 ----
-    private fun readTemp(): Int? {
+    private fun readTemp(label: String): Int? {
         val texts = mutableListOf<String>()
         collectTexts(rootInActiveWindow, texts)
-        val re = Regex("(\\d{1,2})(?:\\.\\d)?\\s*(°|℃|도)")
-        return texts.firstNotNullOfOrNull { re.find(it)?.groupValues?.get(1)?.toIntOrNull() }
+        val start = if (label.isBlank()) 0 else texts.indexOfFirst { it.contains(label) } + 1
+        if (start == 0 && label.isNotBlank()) return null
+        val re = Regex("(\\d{1,2})(?:\\.\\d)?\\s*(°|˚|℃|도)")
+        return texts.drop(start).firstNotNullOfOrNull { re.find(it)?.groupValues?.get(1)?.toIntOrNull() }
     }
 
     private fun screenSummary(): String {
@@ -366,7 +368,8 @@ class MacroService : AccessibilityService() {
 
     private fun setTemp(s: Step.Temp): Boolean {
         repeat(40) {
-            val cur = readTemp() ?: return false
+            val cur = readTemp(s.label) ?: return false
+            RunLog.add("  현재 설정 온도 ${cur}")
             if (cur == s.target) return true
             if (!clickText(if (cur < s.target) s.plus else s.minus, 1, 3)) return false
             Thread.sleep(400)
