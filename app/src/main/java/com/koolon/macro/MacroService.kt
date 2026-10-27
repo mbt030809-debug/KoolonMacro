@@ -425,7 +425,7 @@ class MacroService : AccessibilityService() {
         return !touchOnly && clickChain(node)
     }
 
-    /** 라벨 바로 앞(위)에 있는 형제 노드(아이콘)의 중앙. 없으면 라벨 높이의 1.5배 위 */
+    /** 라벨 바로 앞(위)에 있는 형제 노드(아이콘)의 중앙. 없으면 라벨 높이의 2.7배 위(스크린샷 기준 타일 중앙) */
     private fun iconCenter(label: AccessibilityNodeInfo, r: Rect): Pair<Float, Float> {
         val p = label.parent
         if (p != null) {
@@ -436,7 +436,7 @@ class MacroService : AccessibilityService() {
                 if (!b.isEmpty && b.height() > r.height()) return Pair(b.exactCenterX(), b.exactCenterY())
             }
         }
-        return Pair(r.exactCenterX(), (r.exactCenterY() - r.height() * 1.5f).coerceAtLeast(1f))
+        return Pair(r.exactCenterX(), (r.exactCenterY() - r.height() * 2.7f).coerceAtLeast(1f))
     }
 
     private fun clickChain(node: AccessibilityNodeInfo): Boolean {
