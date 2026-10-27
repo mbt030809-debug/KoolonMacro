@@ -2,7 +2,7 @@ package com.koolon.macro
 
 /**
  * 스크립트 문법 (한 줄에 한 단계, # 으로 시작하면 주석)
- *   click <글자>              글자가 포함된 버튼 클릭 (못 찾으면 5초간 재시도)
+ *   click <글자> [@N]         글자가 포함된 N번째(기본 1) 요소 클릭 (못 찾으면 5초간 재시도)
  *   tap <x> <y>               좌표 탭
  *   wait <ms>                 대기
  *   temp <목표> <+글자> <-글자>  현재 온도를 읽어 목표 온도까지 +/- 버튼 클릭
@@ -11,7 +11,7 @@ package com.koolon.macro
  */
 sealed class Step {
     data class Wait(val ms: Long) : Step()
-    data class ClickText(val text: String) : Step()
+    data class ClickText(val text: String, val index: Int = 1) : Step()
     data class Tap(val x: Float, val y: Float) : Step()
     data class Temp(val target: Int, val plus: String, val minus: String) : Step()
     data class StopIf(val text: String) : Step()
@@ -31,7 +31,11 @@ sealed class Step {
                 val a = arg.split(Regex("\\s+"))
                 val step: Step? = when (parts[0].lowercase()) {
                     "wait" -> arg.toLongOrNull()?.let { Wait(it) }
-                    "click" -> if (arg.isNotEmpty()) ClickText(arg) else null
+                    "click" -> {
+                        val m = Regex("^(.*?)\\s+@(\\d+)$").find(arg)
+                        if (m != null) ClickText(m.groupValues[1], m.groupValues[2].toInt().coerceAtLeast(1))
+                        else if (arg.isNotEmpty()) ClickText(arg) else null
+                    }
                     "stopif" -> if (arg.isNotEmpty()) StopIf(arg) else null
                     "tap" -> {
                         val x = a.getOrNull(0)?.toFloatOrNull()

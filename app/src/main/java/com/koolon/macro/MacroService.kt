@@ -65,7 +65,10 @@ class MacroService : AccessibilityService() {
             firstText(src, 3),
         ).firstOrNull { !it.isNullOrBlank() }?.replace(Regex("\\s+"), " ")?.trim()
         if (label != null) {
-            rec.append("click ").append(label).append('\n')
+            val idx = indexOfMatch(label, src)
+            rec.append("click ").append(label)
+            if (idx > 1) rec.append(" @").append(idx)
+            rec.append('\n')
         } else if (src != null) {
             val r = Rect().also { src.getBoundsInScreen(it) }
             rec.append("tap ").append(r.centerX()).append(' ').append(r.centerY()).append('\n')
@@ -73,6 +76,14 @@ class MacroService : AccessibilityService() {
     }
 
     override fun onInterrupt() {}
+
+    /** 같은 글자가 여러 개일 때 눌린 요소가 몇 번째인지 */
+    private fun indexOfMatch(label: String, src: AccessibilityNodeInfo?): Int {
+        if (src == null) return 1
+        val sb = Rect().also { src.getBoundsInScreen(it) }
+        val i = matches(rootInActiveWindow, label).indexOfFirst { n -> Rect().also { n.getBoundsInScreen(it) } == sb }
+        return if (i < 0) 1 else i + 1
+    }
 
     private fun firstText(n: AccessibilityNodeInfo?, depth: Int): String? {
         if (n == null || depth < 0) return null
@@ -222,7 +233,7 @@ class MacroService : AccessibilityService() {
             RunLog.add("$n. $step")
             val err: String? = when (step) {
                 is Step.Wait -> { Thread.sleep(step.ms); null }
-                is Step.ClickText -> if (clickText(step.text)) null else "${n}단계 '${step.text}' 못 찾음"
+                is Step.ClickText -> if (clickText(step.text, step.index)) null else "${n}단계 '${step.text}' @${step.index} 못 찾음"
                 is Step.Tap -> if (tap(step.x, step.y)) null else "${n}단계 탭 실패"
                 is Step.Temp -> if (setTemp(step)) null else "${n}단계 온도 ${step.target}도 설정 실패"
                 is Step.StopIf -> if (isVisible(step.text)) return true to "이미 완료됨 ('${step.text}' 확인)" else null
@@ -279,28 +290,28 @@ class MacroService : AccessibilityService() {
     }
 
     /** WebView 내부는 findAccessibilityNodeInfosByText 가 비어 나오므로 트리를 직접 탐색 */
-    private fun findNode(root: AccessibilityNodeInfo?, text: String): AccessibilityNodeInfo? {
-        if (root == null) return null
-        var fallback: AccessibilityNodeInfo? = null
+    private fun matches(root: AccessibilityNodeInfo?, text: String): List<AccessibilityNodeInfo> {
+        if (root == null) return emptyList()
+        val hits = mutableListOf<AccessibilityNodeInfo>()
         val stack = ArrayDeque<AccessibilityNodeInfo>()
         stack.add(root)
         while (stack.isNotEmpty()) {
             val n = stack.removeFirst()
-            val hit = n.text?.contains(text) == true || n.contentDescription?.contains(text) == true
-            if (hit) {
-                if (n.isVisibleToUser) return n
-                if (fallback == null) fallback = n
-            }
+            if (n.text?.contains(text) == true || n.contentDescription?.contains(text) == true) hits.add(n)
             for (i in 0 until n.childCount) n.getChild(i)?.let { stack.add(it) }
         }
-        return fallback
+        val vis = hits.filter { it.isVisibleToUser }
+        return if (vis.isNotEmpty()) vis else hits
     }
+
+    private fun findNode(root: AccessibilityNodeInfo?, text: String, index: Int = 1) =
+        matches(root, text).getOrNull(index - 1)
 
     private fun isVisible(text: String) = findNode(rootInActiveWindow, text) != null
 
-    private fun clickText(text: String, retries: Int = 10): Boolean {
+    private fun clickText(text: String, index: Int = 1, retries: Int = 10): Boolean {
         repeat(retries) {
-            val node = findNode(rootInActiveWindow, text)
+            val node = findNode(rootInActiveWindow, text, index)
             if (node != null) {
                 val r = Rect().also { node.getBoundsInScreen(it) }
                 var web = false
@@ -357,7 +368,7 @@ class MacroService : AccessibilityService() {
         repeat(40) {
             val cur = readTemp() ?: return false
             if (cur == s.target) return true
-            if (!clickText(if (cur < s.target) s.plus else s.minus, 3)) return false
+            if (!clickText(if (cur < s.target) s.plus else s.minus, 1, 3)) return false
             Thread.sleep(400)
         }
         return false
