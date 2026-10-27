@@ -32,6 +32,10 @@ class MacroService : AccessibilityService() {
     @Volatile private var recording: StringBuilder? = null
     private var watcher: LocationWatcher? = null
     private var overlay: View? = null
+    @Volatile private var quick = false
+    private val autoStop = Runnable {
+        if (quick) { toast("3분 경과: 녹화 자동 종료"); finishQuickRecord() }
+    }
 
     override fun onServiceConnected() {
         instance = this
@@ -49,6 +53,7 @@ class MacroService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         val rec = recording ?: return
+        if (running) return // 재생 중 클릭은 기록하지 않음
         if (event == null || event.eventType != AccessibilityEvent.TYPE_VIEW_CLICKED) return
         if (event.packageName == packageName || event.packageName == "com.android.systemui") return
         val src = event.source
@@ -86,6 +91,8 @@ class MacroService : AccessibilityService() {
         val launch = findTargetApp()
         if (launch == null) { toast("'$TARGET_APP_NAME' 앱을 찾을 수 없음"); return }
         startRecording()
+        quick = true
+        ui.postDelayed(autoStop, 180_000)
         Notifier.recording(this)
         showOverlay()
         startActivity(launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP))
@@ -93,10 +100,12 @@ class MacroService : AccessibilityService() {
     }
 
     fun finishQuickRecord() {
-        if (!isRecording) return
-        val script = stopRecording()
-        Notifier.cancelRecording(this)
+        ui.removeCallbacks(autoStop)
         hideOverlay()
+        Notifier.cancelRecording(this)
+        if (!quick || !isRecording) { quick = false; return }
+        quick = false
+        val script = stopRecording()
         if (script.isBlank()) { toast("기록된 동작이 없음"); return }
         val name = "녹화 " + java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.KOREA).format(java.util.Date())
         MacroStore.save(this, Macro(name, script))
