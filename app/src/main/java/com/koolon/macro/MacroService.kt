@@ -278,19 +278,43 @@ class MacroService : AccessibilityService() {
         return pm.getLaunchIntentForPackage(match.activityInfo.packageName)
     }
 
-    private fun isVisible(text: String) =
-        rootInActiveWindow?.findAccessibilityNodeInfosByText(text)?.isNotEmpty() == true
+    /** WebView 내부는 findAccessibilityNodeInfosByText 가 비어 나오므로 트리를 직접 탐색 */
+    private fun findNode(root: AccessibilityNodeInfo?, text: String): AccessibilityNodeInfo? {
+        if (root == null) return null
+        var fallback: AccessibilityNodeInfo? = null
+        val stack = ArrayDeque<AccessibilityNodeInfo>()
+        stack.add(root)
+        while (stack.isNotEmpty()) {
+            val n = stack.removeFirst()
+            val hit = n.text?.contains(text) == true || n.contentDescription?.contains(text) == true
+            if (hit) {
+                if (n.isVisibleToUser) return n
+                if (fallback == null) fallback = n
+            }
+            for (i in 0 until n.childCount) n.getChild(i)?.let { stack.add(it) }
+        }
+        return fallback
+    }
+
+    private fun isVisible(text: String) = findNode(rootInActiveWindow, text) != null
 
     private fun clickText(text: String, retries: Int = 10): Boolean {
         repeat(retries) {
-            val node = rootInActiveWindow?.findAccessibilityNodeInfosByText(text)?.firstOrNull()
+            val node = findNode(rootInActiveWindow, text)
             if (node != null) {
+                val r = Rect().also { node.getBoundsInScreen(it) }
+                var web = false
+                var clickable: AccessibilityNodeInfo? = null
                 var n: AccessibilityNodeInfo? = node
                 while (n != null) {
-                    if (n.isClickable && n.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return true
+                    if (n.className?.contains("WebView") == true) web = true
+                    if (clickable == null && n.isClickable) clickable = n
                     n = n.parent
                 }
-                val r = Rect().also { node.getBoundsInScreen(it) }
+                RunLog.add("  찾음: '$text' web=$web click=${clickable != null} bounds=$r")
+                // 웹뷰는 실제 터치(제스처)가 가장 확실
+                if (web && !r.isEmpty && tap(r.exactCenterX(), r.exactCenterY())) return true
+                if (clickable?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true) return true
                 if (!r.isEmpty && tap(r.exactCenterX(), r.exactCenterY())) return true
             }
             Thread.sleep(500)
