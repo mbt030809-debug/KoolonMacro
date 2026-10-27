@@ -140,6 +140,7 @@ class MacroService : AccessibilityService() {
             wm.addView(tv, lp)
             overlay = tv
         } catch (e: Exception) {
+            toast("종료 버튼 표시 실패: ${e.javaClass.simpleName} ${e.message}")
         }
     }
 

@@ -55,7 +55,9 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         MacroService.instance?.finishQuickRecord()
-        status.text = "접근성: " + (if (MacroService.instance != null) "켜짐" else "꺼짐") +
+        @Suppress("DEPRECATION")
+        val build = packageManager.getPackageInfo(packageName, 0).versionCode
+        status.text = "빌드 #$build\n접근성: " + (if (MacroService.instance != null) "켜짐" else "꺼짐") +
             "\n집 위치: " + (if (MacroStore.home(this) != null) "저장됨" else "미설정")
         list.removeAllViews()
         MacroStore.all(this).forEach { m ->
