@@ -163,6 +163,28 @@ class MacroService : AccessibilityService() {
         }
     }
 
+    /** 진단용: 매크로가 터치하는 위치에 빨간 점을 잠깐 표시 (터치는 통과) */
+    private fun showDot(x: Float, y: Float) {
+        ui.post {
+            try {
+                val wm = getSystemService(WindowManager::class.java)
+                val size = 44
+                val dot = View(this).apply {
+                    background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(0xCCFF0000.toInt()) }
+                }
+                val lp = WindowManager.LayoutParams(
+                    size, size, WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                        WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                    PixelFormat.TRANSLUCENT,
+                ).apply { gravity = Gravity.TOP or Gravity.START; this.x = (x - size / 2).toInt(); this.y = (y - size / 2).toInt() }
+                wm.addView(dot, lp)
+                ui.postDelayed({ try { wm.removeView(dot) } catch (e: Exception) {} }, 1500)
+            } catch (e: Exception) {
+            }
+        }
+    }
+
     private fun hideOverlay() = ui.post {
         overlay?.let {
             try {
@@ -409,6 +431,7 @@ class MacroService : AccessibilityService() {
     /** 고정 시간(holdMs) 동안 누르고 뗌. 확인·재시도 없음 */
     private fun tap(x: Float, y: Float, holdMs: Long = TOUCH_HOLD_MS, displayId: Int = activeDisplayId()): Boolean {
         val path = Path().apply { moveTo(x, y); lineTo(x + 1f, y + 1f) }
+        showDot(x, y)
         val ok = dispatchGesture(buildGesture(path, holdMs, displayId), null, null)
         Thread.sleep(holdMs + 80)
         return ok
@@ -479,7 +502,7 @@ class MacroService : AccessibilityService() {
         @Volatile var instance: MacroService? = null
 
         const val TARGET_APP_NAME = "코오롱"
-        const val LAUNCH_WAIT_MS = 600L
+        const val LAUNCH_WAIT_MS = 1200L
         const val STEP_GAP_MS = 200L
         const val MAX_ATTEMPTS = 2
         const val TOUCH_HOLD_MS = 250L // 누르는 시간 (너무 길면 롱프레스로 인식)
