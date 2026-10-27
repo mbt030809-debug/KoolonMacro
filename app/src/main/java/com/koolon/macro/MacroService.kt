@@ -2,6 +2,7 @@ package com.koolon.macro
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
+import android.app.KeyguardManager
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -11,85 +12,185 @@ import android.graphics.Path
 import android.graphics.Rect
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.Toast
 
-sealed class Step {
-    data class Wait(val ms: Long) : Step()
-    /** 화면의 text/contentDescription 에 [text] 가 포함된 클릭 가능 요소를 누른다 */
-    data class ClickText(val text: String) : Step()
-    /** 절대 좌표 탭 */
-    data class Tap(val x: Float, val y: Float) : Step()
-}
-
 class MacroService : AccessibilityService() {
 
-    private val main = Handler(Looper.getMainLooper())
+    private val ui = Handler(Looper.getMainLooper())
     @Volatile private var running = false
+    @Volatile private var recording: StringBuilder? = null
+    private var watcher: LocationWatcher? = null
 
     override fun onServiceConnected() {
         instance = this
+        watcher = LocationWatcher(this).also { it.start() }
+        Scheduler.rescheduleAll(this)
+        Shortcuts.update(this)
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
         instance = null
+        watcher?.stop()
         return super.onUnbind(intent)
     }
 
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        val rec = recording ?: return
+        if (event == null || event.eventType != AccessibilityEvent.TYPE_VIEW_CLICKED) return
+        if (event.packageName == packageName) return
+        val src = event.source
+        val label = listOf(
+            event.text.joinToString(" "),
+            event.contentDescription?.toString(),
+            src?.text?.toString(),
+            src?.contentDescription?.toString(),
+            firstText(src, 3),
+        ).firstOrNull { !it.isNullOrBlank() }?.replace(Regex("\\s+"), " ")?.trim()
+        if (label != null) {
+            rec.append("click ").append(label).append('\n')
+        } else if (src != null) {
+            val r = Rect().also { src.getBoundsInScreen(it) }
+            rec.append("tap ").append(r.centerX()).append(' ').append(r.centerY()).append('\n')
+        }
+    }
+
     override fun onInterrupt() {}
 
-    private fun toast(msg: String) = main.post { Toast.makeText(this, msg, Toast.LENGTH_LONG).show() }
+    private fun firstText(n: AccessibilityNodeInfo?, depth: Int): String? {
+        if (n == null || depth < 0) return null
+        n.text?.takeIf { it.isNotBlank() }?.let { return it.toString() }
+        n.contentDescription?.takeIf { it.isNotBlank() }?.let { return it.toString() }
+        for (i in 0 until n.childCount) firstText(n.getChild(i), depth - 1)?.let { return it }
+        return null
+    }
 
-    /** 앱 실행 후 STEPS 순서대로 수행 */
-    fun runMacro() {
-        if (running) return
-        val launch = findTargetApp()
-        if (launch == null) {
-            toast("'$TARGET_APP_NAME' 앱을 찾을 수 없음")
-            return
-        }
+    // ---- 녹화 / 위치 ----
+    fun startRecording() { recording = StringBuilder() }
+    fun stopRecording(): String = (recording?.toString() ?: "").also { recording = null }
+    val isRecording get() = recording != null
+    fun refreshLocation() { watcher?.start() }
+
+    private fun toast(msg: String) = ui.post { Toast.makeText(this, msg, Toast.LENGTH_LONG).show() }
+
+    private fun report(name: String, msg: String) {
+        toast("$name: $msg")
+        Notifier.post(this, name, msg)
+    }
+
+    // ---- 실행 ----
+    fun runMacro(name: String) {
+        val m = MacroStore.get(this, name)
+        if (m == null) report(name, "매크로를 찾을 수 없음") else runMacro(m)
+    }
+
+    fun runMacro(macro: Macro) {
+        if (running) { toast("이미 실행 중"); return }
+        val (steps, errors) = Step.parse(macro.script)
+        if (errors.isNotEmpty()) { report(macro.name, "스크립트 오류 " + errors.first()); return }
         running = true
-        startActivity(launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP))
         Thread {
             try {
-                Thread.sleep(LAUNCH_WAIT_MS)
-                if (STEPS.isEmpty()) toast("STEPS 비어 있음: 앱 실행만 수행")
-                for (step in STEPS) {
-                    val ok = when (step) {
-                        is Step.Wait -> { Thread.sleep(step.ms); true }
-                        is Step.ClickText -> clickText(step.text)
-                        is Step.Tap -> tap(step.x, step.y)
-                    }
-                    if (!ok) { toast("실패: $step"); return@Thread }
-                    Thread.sleep(STEP_GAP_MS)
-                }
+                execute(macro.name, steps)
+            } catch (e: Exception) {
+                report(macro.name, "오류: ${e.message}")
             } finally {
                 running = false
             }
         }.start()
     }
 
+    private fun execute(name: String, steps: List<Step>) {
+        if (!prepareScreen(name)) return
+        var last = ""
+        for (attempt in 1..MAX_ATTEMPTS) {
+            val (ok, msg) = attempt(steps)
+            if (ok) { report(name, msg); return }
+            last = msg
+            if (attempt < MAX_ATTEMPTS) {
+                performGlobalAction(GLOBAL_ACTION_HOME)
+                Thread.sleep(1000)
+            }
+        }
+        report(name, "실패: $last")
+    }
+
+    /** @return (성공 여부, 메시지) */
+    private fun attempt(steps: List<Step>): Pair<Boolean, String> {
+        val launch = findTargetApp() ?: return false to "'$TARGET_APP_NAME' 앱을 찾을 수 없음"
+        startActivity(launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP))
+        Thread.sleep(LAUNCH_WAIT_MS)
+        for ((i, step) in steps.withIndex()) {
+            val n = i + 1
+            when (step) {
+                is Step.Wait -> Thread.sleep(step.ms)
+                is Step.ClickText -> if (!clickText(step.text)) return false to "${n}단계 '${step.text}' 못 찾음"
+                is Step.Tap -> if (!tap(step.x, step.y)) return false to "${n}단계 탭 실패"
+                is Step.Temp -> if (!setTemp(step)) return false to "${n}단계 온도 ${step.target}도 설정 실패"
+                is Step.StopIf -> if (isVisible(step.text)) return true to "이미 완료됨 ('${step.text}' 확인)"
+                Step.Home -> performGlobalAction(GLOBAL_ACTION_HOME)
+                Step.Back -> performGlobalAction(GLOBAL_ACTION_BACK)
+            }
+            Thread.sleep(STEP_GAP_MS)
+        }
+        return true to "완료"
+    }
+
+    /** 화면 켜기 + (비밀번호 없는) 잠금 밀어서 해제 */
+    private fun prepareScreen(name: String): Boolean {
+        val pm = getSystemService(PowerManager::class.java)
+        if (!pm.isInteractive) {
+            @Suppress("DEPRECATION")
+            val wl = pm.newWakeLock(
+                PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP, "koolon:wake",
+            )
+            wl.acquire(15_000)
+            Thread.sleep(1000)
+        }
+        val km = getSystemService(KeyguardManager::class.java)
+        if (km.isKeyguardLocked) {
+            if (km.isKeyguardSecure) {
+                report(name, "잠금 상태: 화면을 직접 해제해야 실행됨")
+                return false
+            }
+            val dm = resources.displayMetrics
+            val path = Path().apply {
+                moveTo(dm.widthPixels / 2f, dm.heightPixels * 0.85f)
+                lineTo(dm.widthPixels / 2f, dm.heightPixels * 0.2f)
+            }
+            dispatchGesture(
+                GestureDescription.Builder().addStroke(GestureDescription.StrokeDescription(path, 0, 300)).build(),
+                null, null,
+            )
+            Thread.sleep(1200)
+        }
+        return true
+    }
+
     private fun findTargetApp(): Intent? {
         val pm = packageManager
-        val main = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
-        val match = pm.queryIntentActivities(main, PackageManager.MATCH_ALL)
-            .firstOrNull { it.loadLabel(pm).toString().contains(TARGET_APP_NAME) }
-            ?: return null
+        val q = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+        val match = pm.queryIntentActivities(q, PackageManager.MATCH_ALL)
+            .firstOrNull { it.loadLabel(pm).toString().contains(TARGET_APP_NAME) } ?: return null
         return pm.getLaunchIntentForPackage(match.activityInfo.packageName)
     }
 
-    private fun clickText(text: String): Boolean {
-        repeat(10) {
-            val root = rootInActiveWindow
-            if (root != null) {
-                val node = root.findAccessibilityNodeInfosByText(text).firstOrNull()
+    private fun isVisible(text: String) =
+        rootInActiveWindow?.findAccessibilityNodeInfosByText(text)?.isNotEmpty() == true
+
+    private fun clickText(text: String, retries: Int = 10): Boolean {
+        repeat(retries) {
+            val node = rootInActiveWindow?.findAccessibilityNodeInfosByText(text)?.firstOrNull()
+            if (node != null) {
                 var n: AccessibilityNodeInfo? = node
                 while (n != null) {
                     if (n.isClickable && n.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return true
                     n = n.parent
                 }
+                val r = Rect().also { node.getBoundsInScreen(it) }
+                if (!r.isEmpty && tap(r.exactCenterX(), r.exactCenterY())) return true
             }
             Thread.sleep(500)
         }
@@ -98,12 +199,38 @@ class MacroService : AccessibilityService() {
 
     private fun tap(x: Float, y: Float): Boolean {
         val path = Path().apply { moveTo(x, y) }
-        val gesture = GestureDescription.Builder()
+        val g = GestureDescription.Builder()
             .addStroke(GestureDescription.StrokeDescription(path, 0, 50)).build()
-        return dispatchGesture(gesture, null, null)
+        val ok = dispatchGesture(g, null, null)
+        Thread.sleep(200)
+        return ok
     }
 
-    /** 현재 화면의 요소를 텍스트로 만들어 클립보드에 복사 */
+    // ---- 온도 ----
+    private fun readTemp(): Int? {
+        val texts = mutableListOf<String>()
+        collectTexts(rootInActiveWindow, texts)
+        val re = Regex("(\\d{1,2})(?:\\.\\d)?\\s*(°|℃|도)")
+        return texts.firstNotNullOfOrNull { re.find(it)?.groupValues?.get(1)?.toIntOrNull() }
+    }
+
+    private fun collectTexts(n: AccessibilityNodeInfo?, out: MutableList<String>) {
+        if (n == null) return
+        n.text?.let { out.add(it.toString()) }
+        for (i in 0 until n.childCount) collectTexts(n.getChild(i), out)
+    }
+
+    private fun setTemp(s: Step.Temp): Boolean {
+        repeat(40) {
+            val cur = readTemp() ?: return false
+            if (cur == s.target) return true
+            if (!clickText(if (cur < s.target) s.plus else s.minus, 3)) return false
+            Thread.sleep(400)
+        }
+        return false
+    }
+
+    // ---- 화면 덤프 ----
     fun dumpScreen() {
         val root = rootInActiveWindow
         if (root == null) {
@@ -135,11 +262,6 @@ class MacroService : AccessibilityService() {
         const val TARGET_APP_NAME = "코오롱"
         const val LAUNCH_WAIT_MS = 3000L
         const val STEP_GAP_MS = 800L
-
-        /** 덤프 결과를 보고 채울 것. 예: Step.ClickText("난방"), Step.Tap(540f, 1200f) */
-        val STEPS: List<Step> = listOf(
-            Step.ClickText("난방"),
-            Step.ClickText("실내"),
-        )
+        const val MAX_ATTEMPTS = 2
     }
 }

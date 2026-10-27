@@ -6,10 +6,11 @@
     android:background="#FFE64A19">
 
     <TextView
+        android:id="@+id/widget_label"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_gravity="center"
-        android:text="🔥 난방 26°"
+        android:text="🔥 매크로"
         android:textColor="#FFFFFFFF"
         android:textSize="16sp"
         android:textStyle="bold" />
