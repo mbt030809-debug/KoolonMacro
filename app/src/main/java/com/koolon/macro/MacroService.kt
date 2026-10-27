@@ -183,6 +183,8 @@ class MacroService : AccessibilityService() {
         val (steps, errors) = Step.parse(macro.script)
         if (errors.isNotEmpty()) { report(macro.name, "스크립트 오류 " + errors.first()); return }
         running = true
+        RunLog.clear()
+        RunLog.add("실행: ${macro.name} (${steps.size}단계)")
         Thread {
             try {
                 execute(macro.name, steps)
@@ -195,7 +197,7 @@ class MacroService : AccessibilityService() {
     }
 
     private fun execute(name: String, steps: List<Step>) {
-        if (!prepareScreen(name)) return
+        if (!prepareScreen(name)) { RunLog.add("화면 준비 실패(잠금)"); return }
         var last = ""
         for (attempt in 1..MAX_ATTEMPTS) {
             val (ok, msg) = attempt(steps)
@@ -214,16 +216,23 @@ class MacroService : AccessibilityService() {
         val launch = findTargetApp() ?: return false to "'$TARGET_APP_NAME' 앱을 찾을 수 없음"
         startActivity(launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP))
         Thread.sleep(LAUNCH_WAIT_MS)
+        RunLog.add("앱 실행 후 화면: " + screenSummary())
         for ((i, step) in steps.withIndex()) {
             val n = i + 1
-            when (step) {
-                is Step.Wait -> Thread.sleep(step.ms)
-                is Step.ClickText -> if (!clickText(step.text)) return false to "${n}단계 '${step.text}' 못 찾음"
-                is Step.Tap -> if (!tap(step.x, step.y)) return false to "${n}단계 탭 실패"
-                is Step.Temp -> if (!setTemp(step)) return false to "${n}단계 온도 ${step.target}도 설정 실패"
-                is Step.StopIf -> if (isVisible(step.text)) return true to "이미 완료됨 ('${step.text}' 확인)"
-                Step.Home -> performGlobalAction(GLOBAL_ACTION_HOME)
-                Step.Back -> performGlobalAction(GLOBAL_ACTION_BACK)
+            RunLog.add("$n. $step")
+            val err: String? = when (step) {
+                is Step.Wait -> { Thread.sleep(step.ms); null }
+                is Step.ClickText -> if (clickText(step.text)) null else "${n}단계 '${step.text}' 못 찾음"
+                is Step.Tap -> if (tap(step.x, step.y)) null else "${n}단계 탭 실패"
+                is Step.Temp -> if (setTemp(step)) null else "${n}단계 온도 ${step.target}도 설정 실패"
+                is Step.StopIf -> if (isVisible(step.text)) return true to "이미 완료됨 ('${step.text}' 확인)" else null
+                Step.Home -> { performGlobalAction(GLOBAL_ACTION_HOME); null }
+                Step.Back -> { performGlobalAction(GLOBAL_ACTION_BACK); null }
+            }
+            if (err != null) {
+                RunLog.add("실패: $err")
+                RunLog.add("화면: " + screenSummary())
+                return false to err
             }
             Thread.sleep(STEP_GAP_MS)
         }
@@ -306,9 +315,17 @@ class MacroService : AccessibilityService() {
         return texts.firstNotNullOfOrNull { re.find(it)?.groupValues?.get(1)?.toIntOrNull() }
     }
 
+    private fun screenSummary(): String {
+        val root = rootInActiveWindow ?: return "(화면 읽기 불가)"
+        val t = mutableListOf<String>()
+        collectTexts(root, t)
+        return "pkg=${root.packageName} " + t.filter { it.isNotBlank() }.take(60).joinToString(" | ")
+    }
+
     private fun collectTexts(n: AccessibilityNodeInfo?, out: MutableList<String>) {
         if (n == null) return
         n.text?.let { out.add(it.toString()) }
+        n.contentDescription?.let { out.add(it.toString()) }
         for (i in 0 until n.childCount) collectTexts(n.getChild(i), out)
     }
 

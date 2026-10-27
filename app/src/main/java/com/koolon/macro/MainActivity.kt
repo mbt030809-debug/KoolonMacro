@@ -22,6 +22,7 @@ class MainActivity : Activity() {
 
     private lateinit var status: TextView
     private lateinit var list: LinearLayout
+    private lateinit var logView: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -49,6 +50,16 @@ class MainActivity : Activity() {
                 Handler(Looper.getMainLooper()).postDelayed({ s.dumpScreen() }, 5000)
             }
         })
+        root.addView(btn("📋 마지막 실행 로그 복사") {
+            val t = RunLog.text()
+            if (t.isEmpty()) toast("로그 없음: 매크로를 먼저 실행하세요") else {
+                val cm = getSystemService(android.content.ClipboardManager::class.java)
+                cm.setPrimaryClip(android.content.ClipData.newPlainText("log", t))
+                toast("로그 복사됨. 채팅에 붙여넣기")
+            }
+        })
+        logView = TextView(this).apply { textSize = 11f }
+        root.addView(logView)
         root.addView(btn("+ 새 매크로") { startActivity(Intent(this, EditActivity::class.java)) })
         list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         root.addView(list)
@@ -62,6 +73,7 @@ class MainActivity : Activity() {
         val build = packageManager.getPackageInfo(packageName, 0).versionCode
         status.text = "빌드 #$build\n접근성: " + (if (MacroService.instance != null) "켜짐" else "꺼짐") +
             "\n집 위치: " + (if (MacroStore.home(this) != null) "저장됨" else "미설정")
+        logView.text = RunLog.text().takeLast(500)
         list.removeAllViews()
         MacroStore.all(this).forEach { m ->
             val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
