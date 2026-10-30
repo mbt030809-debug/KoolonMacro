@@ -9,8 +9,7 @@ function ma(a, n, ema) {
       o[i] = i >= n - 1 ? p : NaN;
     }
   } else {
-    let t = 0;
-    for (let i = 0; i < a.length; i++) { t += a[i]; if (i >= n) t -= a[i - n]; if (i >= n - 1) o[i] = t / n; }
+    for (let i = n - 1; i < a.length; i++) { let t = 0; for (let j = i - n + 1; j <= i; j++) t += a[j]; o[i] = t / n; } // 직접 합산: 누적합 부동소수 오차 방지
   }
   return o;
 }
