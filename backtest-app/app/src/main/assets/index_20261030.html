@@ -53,15 +53,17 @@ for(const k of['l','r']){d.querySelector('.'+k+'n').style.display=d.querySelecto
 const readConds=t=>[...$(t).children].map(d=>({conn:d.querySelector('.cn')?.value,lk:d.querySelector('.lk').value,ln:+d.querySelector('.ln').value,op:d.querySelector('.op').value,rk:d.querySelector('.rk').value,rn:+d.querySelector('.rn').value}));
 document.querySelectorAll('.add').forEach(b=>b.onclick=()=>addCond(b.dataset.t,'price',0,'sma',200));
 addCond('buy','price',0,'sma',200);
-async function load(sym,s,e){const r=await fetch(`/api/prices?symbol=${sym}&start=${s}&end=${e}`);const j=await r.json();if(j.error)throw Error(j.error);return j}
+async function load(sym,s,e){const r=await fetch(`/api/prices?symbol=${encodeURIComponent(sym)}&start=${s}&end=${e}`);const j=await r.json();if(j.error)throw Error(j.error);return j}
 const rt=a=>a.map((v,i)=>i?v/a[i-1]-1:0),eqOf=r=>{const o=[100];for(let i=1;i<r.length;i++)o.push(o[i-1]*(1+r[i]));return o};
 const pc=v=>(v*100).toFixed(1)+'%',cl=v=>v>=0?'pos':'neg';
 async function run(){$('err').textContent='';try{
 const sig=$('sig').value.trim().toUpperCase(),trd=$('trd').value.trim().toUpperCase(),cmp=$('cmp').value.split(',').map(x=>x.trim().toUpperCase()).filter(Boolean),s=$('s').value,e=$('e').value;
+if(!sig||!trd)throw Error('기준 지표·매매 종목을 입력하세요');if(s>=e)throw Error('시작일이 종료일보다 빨라야 합니다');
 const init=Math.min(100,Math.max(0,+$('init').value||0))/100,delay=Math.max(0,Math.floor(+$('delay').value||0));
 const syms=[...new Set([sig,trd,...cmp])],data={};await Promise.all(syms.map(async x=>data[x]=new Map(await load(x,s,e))));
 const dates=[...data[sig].keys()].filter(d=>syms.every(x=>data[x].has(d))).sort();if(dates.length<3)throw Error('겹치는 데이터가 부족합니다');
 const P=x=>dates.map(d=>data[x].get(d)),bc=readConds('buy'),sc=readConds('sell');if(!bc.length)throw Error('매수 조건을 1개 이상 추가하세요');
+for(const c of[...bc,...sc])for(const[k,n]of[[c.lk,c.ln],[c.rk,c.rn]])if(k!='price'&&!(n>=2&&Number.isInteger(n)))throw Error('이동평균 기간은 2 이상의 정수여야 합니다');
 const buy=evalConds(P(sig),bc),sell=evalConds(P(sig),sc),w=applied(targets(buy,sell,init),init,delay);
 const sim=simulate(dates,P(trd),w,{cashRate:(+$('cash').value||0)/100,taxRate:(+$('tax').value||0)/100});
 const out=[{name:`전략(${sig} 신호→${trd})`,e:sim.eq},{name:`${trd} 보유`,e:buyHold(P(trd))},...[...new Set([sig,...cmp])].filter(x=>x!=trd).map(x=>({name:`${x} 보유`,e:buyHold(P(x))}))];

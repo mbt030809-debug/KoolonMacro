@@ -30,8 +30,9 @@ class MainActivity : Activity() {
                 val u = r.url
                 if (u.host != HOST) return null
                 if (u.path == "/api/prices") {
-                    val sym = u.getQueryParameter("symbol") ?: ""
+                    val sym = u.getQueryParameter("symbol")?.trim()?.uppercase() ?: ""
                     val (code, body) = try {
+                        require(sym.isNotEmpty()) { "종목이 비었습니다" }
                         200 to prices(sym, u.getQueryParameter("start")!!, u.getQueryParameter("end")!!)
                     } catch (e: Exception) {
                         502 to JSONObject().put("error", "$sym: ${e.message}").toString()
@@ -50,6 +51,9 @@ class MainActivity : Activity() {
         web.loadUrl("https://$HOST/")
     }
 
+    @Deprecated("Deprecated in Java")
+    override fun onBackPressed() { if (web.canGoBack()) web.goBack() else super.onBackPressed() }
+
     private fun json(code: Int, body: String) =
         WebResourceResponse("application/json", "utf-8", code, if (code == 200) "OK" else "Error",
             mapOf("Access-Control-Allow-Origin" to "*"), body.byteInputStream())
@@ -62,10 +66,18 @@ class MainActivity : Activity() {
         val c = URL(url).openConnection() as HttpURLConnection
         c.setRequestProperty("User-Agent", "Mozilla/5.0")
         c.connectTimeout = 20000; c.readTimeout = 20000
-        val res = JSONObject(c.inputStream.bufferedReader().readText())
-            .getJSONObject("chart").getJSONArray("result").getJSONObject(0)
-        val ts = res.getJSONArray("timestamp")
-        val adj = res.getJSONObject("indicators").getJSONArray("adjclose").getJSONObject(0).getJSONArray("adjclose")
+        val chart = try {
+            if (c.responseCode != 200) error("Yahoo 응답 ${c.responseCode}")
+            JSONObject(c.inputStream.bufferedReader().use { it.readText() }).getJSONObject("chart")
+        } finally { c.disconnect() }
+        val result = chart.optJSONArray("result")
+        if (result == null || result.length() == 0)
+            error(chart.optJSONObject("error")?.optString("description") ?: "데이터 없음")
+        val res = result.getJSONObject(0)
+        val ts = res.optJSONArray("timestamp") ?: error("해당 기간 데이터 없음")
+        val ind = res.getJSONObject("indicators")
+        val adj = ind.optJSONArray("adjclose")?.getJSONObject(0)?.getJSONArray("adjclose")
+            ?: ind.getJSONArray("quote").getJSONObject(0).getJSONArray("close")
         val out = JSONArray()
         for (i in 0 until ts.length()) {
             if (adj.isNull(i)) continue

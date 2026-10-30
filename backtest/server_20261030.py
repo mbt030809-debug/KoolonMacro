@@ -18,9 +18,14 @@ def yahoo(symbol, start, end):
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     with urllib.request.urlopen(req, timeout=20) as r:
         d = json.load(r)
+    if not d["chart"].get("result"):
+        raise ValueError((d["chart"].get("error") or {}).get("description", "데이터 없음"))
     res = d["chart"]["result"][0]
-    ts = res["timestamp"]
-    adj = res["indicators"]["adjclose"][0]["adjclose"]
+    ts = res.get("timestamp") or []
+    if not ts:
+        raise ValueError("해당 기간 데이터 없음")
+    ind = res["indicators"]
+    adj = ind["adjclose"][0]["adjclose"] if ind.get("adjclose") else ind["quote"][0]["close"]
     return [[time.strftime("%Y-%m-%d", time.gmtime(t)), c] for t, c in zip(ts, adj) if c is not None]
 
 
@@ -50,14 +55,16 @@ class H(BaseHTTPRequestHandler):
         u = urllib.parse.urlparse(self.path)
         if u.path == "/api/prices":
             q = urllib.parse.parse_qs(u.query)
-            sym, s, e = q["symbol"][0].upper(), q["start"][0], q["end"][0]
             try:
+                sym, s, e = q["symbol"][0].upper(), q["start"][0], q["end"][0]
+                if not sym:
+                    raise ValueError("종목이 비었습니다")
                 key = (sym, s, e)
                 if key not in CACHE:
                     CACHE[key] = (mock if MOCK else yahoo)(sym, s, e)
                 self.send(200, json.dumps(CACHE[key]).encode(), "application/json")
             except Exception as ex:
-                self.send(502, json.dumps({"error": "%s: %s" % (sym, ex)}).encode(), "application/json")
+                self.send(502, json.dumps({"error": "%s" % ex}).encode(), "application/json")
         else:
             name = "index_20261030.html" if u.path == "/" else os.path.basename(u.path)
             fp = os.path.join(HERE, name)
