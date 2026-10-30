@@ -59,8 +59,13 @@ class H(BaseHTTPRequestHandler):
             except Exception as ex:
                 self.send(502, json.dumps({"error": "%s: %s" % (sym, ex)}).encode(), "application/json")
         else:
-            with open(os.path.join(HERE, "index_20261030.html"), "rb") as f:
-                self.send(200, f.read(), "text/html; charset=utf-8")
+            name = "index_20261030.html" if u.path == "/" else os.path.basename(u.path)
+            fp = os.path.join(HERE, name)
+            if not os.path.isfile(fp):
+                return self.send(404, b"", "text/plain")
+            with open(fp, "rb") as f:
+                ct = "application/javascript" if name.endswith(".js") else "text/html; charset=utf-8"
+                self.send(200, f.read(), ct)
 
 
 if __name__ == "__main__":

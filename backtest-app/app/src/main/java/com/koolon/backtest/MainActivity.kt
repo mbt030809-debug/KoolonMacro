@@ -39,8 +39,11 @@ class MainActivity : Activity() {
                     return json(code, body)
                 }
                 if (u.path == "/favicon.ico") return json(404, "")
-                val html = assets.open("index_20261030.html")
-                return WebResourceResponse("text/html", "utf-8", html)
+                val name = if (u.path == "/" || u.path.isNullOrEmpty()) "index_20261030.html" else u.path!!.trimStart('/')
+                return try {
+                    val mime = if (name.endsWith(".js")) "application/javascript" else "text/html"
+                    WebResourceResponse(mime, "utf-8", assets.open(name))
+                } catch (e: Exception) { json(404, "") }
             }
         }
         setContentView(web)
