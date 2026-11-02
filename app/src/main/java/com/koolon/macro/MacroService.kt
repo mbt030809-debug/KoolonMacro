@@ -36,6 +36,7 @@ class MacroService : AccessibilityService() {
     private var overlay: View? = null
     @Volatile private var quick = false
     @Volatile private var targetLabel = ""
+    @Volatile private var targetPkg = ""
     private val autoStop = Runnable {
         if (quick) { toast("3분 경과: 녹화 자동 종료"); finishQuickRecord() }
     }
@@ -276,7 +277,7 @@ class MacroService : AccessibilityService() {
             last = msg
             if (attempt < MAX_ATTEMPTS) {
                 performGlobalAction(GLOBAL_ACTION_HOME)
-                Thread.sleep(1000)
+                Thread.sleep(400)
             }
         }
         report(name, "실패: $last")
@@ -286,7 +287,8 @@ class MacroService : AccessibilityService() {
     private fun attempt(steps: List<Step>): Pair<Boolean, String> {
         val launch = findTargetApp() ?: return false to "'$TARGET_APP_NAME' 앱을 찾을 수 없음"
         startActivity(launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP))
-        Thread.sleep(LAUNCH_WAIT_MS)
+        val launchEnd = System.currentTimeMillis() + 6000
+        while (System.currentTimeMillis() < launchEnd && rootInActiveWindow?.packageName?.toString() != targetPkg) Thread.sleep(30)
         val dm = resources.displayMetrics
         RunLog.add("화면 ${dm.widthPixels}x${dm.heightPixels} 창: " + windows.joinToString(" ; ") { w ->
             "type=${w.type} act=${w.isActive} d=${if (Build.VERSION.SDK_INT >= 34) w.displayId else -1} " + Rect().also { w.getBoundsInScreen(it) }
@@ -309,7 +311,6 @@ class MacroService : AccessibilityService() {
                 RunLog.add("화면: " + screenSummary())
                 return false to err
             }
-            Thread.sleep(STEP_GAP_MS)
         }
         return true to "완료"
     }
@@ -349,6 +350,7 @@ class MacroService : AccessibilityService() {
             .firstOrNull { it.activityInfo.packageName != packageName && it.loadLabel(pm).toString().contains(TARGET_APP_NAME) }
             ?: return null
         targetLabel = match.loadLabel(pm).toString()
+        targetPkg = match.activityInfo.packageName
         return pm.getLaunchIntentForPackage(match.activityInfo.packageName)
     }
 
@@ -373,9 +375,14 @@ class MacroService : AccessibilityService() {
     /** 최근 앱 화면에서 대상 앱 카드(이름으로 식별)를 위로 밀어 종료. 못 찾으면 아무것도 닫지 않음 */
     private fun killApp() {
         performGlobalAction(GLOBAL_ACTION_RECENTS)
-        Thread.sleep(900)
         val label = targetLabel.ifBlank { TARGET_APP_NAME }
-        val card = findNode(rootInActiveWindow, label)
+        var card: AccessibilityNodeInfo? = null
+        val cardEnd = System.currentTimeMillis() + 1800
+        while (System.currentTimeMillis() < cardEnd) { // 최근 앱 화면에 카드가 보이는 즉시 진행
+            card = findNode(rootInActiveWindow, label)
+            if (card != null) { Thread.sleep(120); card = findNode(rootInActiveWindow, label) ?: card; break }
+            Thread.sleep(35)
+        }
         if (card == null) {
             RunLog.add("앱 종료 생략: 최근 앱에서 '$label' 카드를 못 찾음")
             RunLog.add("최근 앱 화면: " + screenSummary())
@@ -393,7 +400,7 @@ class MacroService : AccessibilityService() {
             lineTo(x, maxOf(startY - h * 0.6f, 5f))
         }
         dispatchGesture(buildGesture(path, 160, activeDisplayId()), null, null)
-        Thread.sleep(500)
+        Thread.sleep(250)
         performGlobalAction(GLOBAL_ACTION_HOME)
     }
 
@@ -411,8 +418,15 @@ class MacroService : AccessibilityService() {
     private fun clickText(text: String, index: Int = 1, retries: Int = 40, touchOnly: Boolean = false, icon: Boolean = false): Boolean {
         repeat(retries) {
             val node = findNode(rootInActiveWindow, text, index)
-            if (node != null && press(node, touchOnly, icon)) return true // 확인·재클릭 없이 한 번만 누름
-            Thread.sleep(100)
+            if (node != null) {
+                // 전환 애니메이션 중에는 좌표가 움직이므로, 짧은 간격으로 두 번 읽어 위치가 같으면 바로 누름
+                val r1 = Rect().also { node.getBoundsInScreen(it) }
+                Thread.sleep(35)
+                val again = findNode(rootInActiveWindow, text, index)
+                val r2 = again?.let { n -> Rect().also { n.getBoundsInScreen(it) } }
+                if (again != null && r1 == r2 && press(again, touchOnly, icon)) return true // 확인·재클릭 없이 한 번만 누름
+            }
+            Thread.sleep(35)
         }
         return false
     }
@@ -488,8 +502,13 @@ class MacroService : AccessibilityService() {
     private fun tap(x: Float, y: Float, holdMs: Long = TOUCH_HOLD_MS, displayId: Int = activeDisplayId()): Boolean {
         val path = Path().apply { moveTo(x, y); lineTo(x + 1f, y + 1f) }
         showDot(x, y)
-        val ok = dispatchGesture(buildGesture(path, holdMs, displayId), null, null)
-        Thread.sleep(holdMs + 40)
+        val done = java.util.concurrent.CountDownLatch(1)
+        val cb = object : GestureResultCallback() {
+            override fun onCompleted(g: GestureDescription?) { done.countDown() }
+            override fun onCancelled(g: GestureDescription?) { done.countDown() }
+        }
+        val ok = dispatchGesture(buildGesture(path, holdMs, displayId), cb, null)
+        if (ok) done.await(holdMs + 600, java.util.concurrent.TimeUnit.MILLISECONDS)
         return ok
     }
 
@@ -518,14 +537,29 @@ class MacroService : AccessibilityService() {
     }
 
     private fun setTemp(s: Step.Temp): Boolean {
+        var cur = waitTemp(s.label, null, 2500) ?: return false
         repeat(40) {
-            val cur = readTemp(s.label) ?: return false
-            RunLog.add("  현재 설정 온도 ${cur}")
+            RunLog.add("  현재 설정 온도 $cur")
             if (cur == s.target) return true
-            if (!clickText(if (cur < s.target) s.plus else s.minus, 1, 12)) return false
-            Thread.sleep(250)
+            if (!clickText(if (cur < s.target) s.plus else s.minus, 1, 40)) return false
+            cur = waitTemp(s.label, cur, 900) ?: cur // 값이 바뀌는 즉시 다음 클릭
         }
         return false
+    }
+
+    /** 온도를 읽음. changedFrom 이 있으면 그 값에서 바뀔 때까지(최대 ms) 기다림 */
+    private fun waitTemp(label: String, changedFrom: Int?, ms: Long): Int? {
+        val end = System.currentTimeMillis() + ms
+        var last: Int? = null
+        while (System.currentTimeMillis() < end) {
+            val t = readTemp(label)
+            if (t != null) {
+                last = t
+                if (changedFrom == null || t != changedFrom) return t
+            }
+            Thread.sleep(35)
+        }
+        return last
     }
 
     // ---- 화면 덤프 ----
