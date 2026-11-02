@@ -19,8 +19,9 @@ android {
         applicationId = "com.koolon.macro"
         minSdk = 26
         targetSdk = 34
-        versionCode = (System.getenv("GITHUB_RUN_NUMBER") ?: "1").toInt()
-        versionName = "1.0"
+        // 빌드 시각(분 단위) 기반: 실행 번호가 달라져도 항상 이전 설치본보다 커서 덮어쓰기 가능
+        versionCode = (System.currentTimeMillis() / 60000L).toInt()
+        versionName = "1.0." + (System.getenv("GITHUB_RUN_NUMBER") ?: "0")
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

@@ -15,7 +15,20 @@ jobs:
         with:
           gradle-version: 8.7
       - run: gradle :app:assembleDebug --stacktrace
+      - name: APK 파일명에 날짜·빌드번호 붙이기
+        run: |
+          NAME=KoolonMacro_$(TZ=Asia/Seoul date +%Y%m%d)_b${{ github.run_number }}.apk
+          cp app/build/outputs/apk/debug/app-debug.apk "$NAME"
+          echo "APK_NAME=$NAME" >> "$GITHUB_ENV"
       - uses: actions/upload-artifact@v4
         with:
-          name: KoolonMacro-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: KoolonMacro-apk-b${{ github.run_number }}
+          path: ${{ env.APK_NAME }}
+      - name: APK 서명·버전 확인
+        continue-on-error: true
+        run: |
+          BT=$ANDROID_HOME/build-tools/$(ls $ANDROID_HOME/build-tools | sort -V | tail -1)
+          echo "== APKINFO =="
+          $BT/apksigner verify --print-certs "$APK_NAME" 2>&1 | head -8
+          $BT/aapt2 dump badging "$APK_NAME" 2>&1 | head -2
+          echo "== END =="
