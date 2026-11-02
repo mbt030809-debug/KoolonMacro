@@ -15,6 +15,13 @@ jobs:
         with:
           gradle-version: 8.7
       - run: gradle :app:assembleDebug --stacktrace
+      - name: APK 서명·버전 확인
+        run: |
+          BT=$(ls $ANDROID_HOME/build-tools | sort -V | tail -1)
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          $ANDROID_HOME/build-tools/$BT/apksigner verify --print-certs $APK | grep -E "Signer #1 certificate SHA-256|Verifies"
+          $ANDROID_HOME/build-tools/$BT/aapt2 dump badging $APK | grep -E "^package:"
+          echo "기대 서명 SHA-256: 7ea5e5a42941716 3f546b8af025cbb99b0bc67245f9cd199ace4b53e71dc8309"
       - uses: actions/upload-artifact@v4
         with:
           name: KoolonMacro-apk
