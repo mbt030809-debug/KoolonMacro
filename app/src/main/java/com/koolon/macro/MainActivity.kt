@@ -70,9 +70,9 @@ class MainActivity : Activity() {
             onResume()
         })
         root.addView(android.widget.CheckBox(this).apply {
-            text = "실행 후 앱 자동 종료 (최근 앱에서 밀어내기)"
-            isChecked = MacroStore.autoClose(this@MainActivity)
-            setOnCheckedChangeListener { _, v -> MacroStore.setAutoClose(this@MainActivity, v) }
+            text = "매크로 실행 중 화면 터치 잠금 (중지 버튼은 사용 가능)"
+            isChecked = MacroStore.blockInput(this@MainActivity)
+            setOnCheckedChangeListener { _, v -> MacroStore.setBlockInput(this@MainActivity, v) }
         })
         root.addView(btn("+ 새 매크로") { startActivity(Intent(this, EditActivity::class.java)) })
         list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }

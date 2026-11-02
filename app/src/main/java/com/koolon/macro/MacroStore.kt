@@ -19,6 +19,11 @@ object MacroStore {
     const val SAMPLE2_NAME = "안방 외출"
     const val SAMPLE2_SCRIPT = "icon 난방\nclick 상세 설정 @2\nclick 외출\n"
 
+    /** 실행 중 화면 터치 잠금 (기본 켜짐) */
+    fun blockInput(ctx: Context) = prefs(ctx).getBoolean("blockInput", true)
+
+    fun setBlockInput(ctx: Context, v: Boolean) = prefs(ctx).edit().putBoolean("blockInput", v).apply()
+
     fun autoClose(ctx: Context) = prefs(ctx).getBoolean("autoClose", true)
 
     fun setAutoClose(ctx: Context, v: Boolean) = prefs(ctx).edit().putBoolean("autoClose", v).apply()

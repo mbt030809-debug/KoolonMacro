@@ -37,6 +37,13 @@ class MacroService : AccessibilityService() {
     @Volatile private var quick = false
     @Volatile private var targetLabel = ""
     @Volatile private var targetPkg = ""
+    @Volatile private var cancelRequested = false
+    private var blocker: View? = null
+    private var blockerLp: WindowManager.LayoutParams? = null
+
+    private class CancelledByUser : RuntimeException()
+
+    private fun checkCancel() { if (cancelRequested) throw CancelledByUser() }
     private val autoStop = Runnable {
         if (quick) { toast("3분 경과: 녹화 자동 종료"); finishQuickRecord() }
     }
@@ -60,6 +67,7 @@ class MacroService : AccessibilityService() {
 
     override fun onUnbind(intent: Intent?): Boolean {
         instance = null
+        hideBlocker()
         try { unregisterReceiver(unlockReceiver) } catch (e: Exception) {}
         hideOverlay()
         return super.onUnbind(intent)
@@ -120,7 +128,7 @@ class MacroService : AccessibilityService() {
         ui.postDelayed(autoStop, 180_000)
         Notifier.recording(this)
         showOverlay()
-        startActivity(launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP))
+        startActivity(launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK))
         toast("녹화 중: 평소처럼 조작하세요. 끝나면 화면의 빨간 '녹화 종료' 버튼 누르기")
     }
 
@@ -200,6 +208,79 @@ class MacroService : AccessibilityService() {
         }
     }
 
+    /** 매크로 실행 중 사용자 터치를 막는 전체 화면 오버레이 + 중지 버튼 */
+    private fun showBlocker() {
+        cancelRequested = false
+        if (!MacroStore.blockInput(this)) return
+        ui.post {
+            if (blocker != null) return@post
+            try {
+                val wm = getSystemService(WindowManager::class.java)
+                val root = android.widget.FrameLayout(this).apply {
+                    setBackgroundColor(0x22000000)
+                    isClickable = true
+                    setOnTouchListener { _, _ -> true } // 모든 터치를 삼킴
+                }
+                val stop = TextView(this).apply {
+                    text = "⏹ 매크로 중지"
+                    setTextColor(Color.WHITE)
+                    textSize = 16f
+                    setPadding(56, 30, 56, 30)
+                    background = GradientDrawable().apply { setColor(0xEED32F2F.toInt()); cornerRadius = 100f }
+                    setOnClickListener { cancelRequested = true }
+                }
+                root.addView(stop, android.widget.FrameLayout.LayoutParams(
+                    android.widget.FrameLayout.LayoutParams.WRAP_CONTENT,
+                    android.widget.FrameLayout.LayoutParams.WRAP_CONTENT,
+                    Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL,
+                ).apply { bottomMargin = 220 })
+                val lp = WindowManager.LayoutParams(
+                    WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT,
+                    WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                        WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                    PixelFormat.TRANSLUCENT,
+                )
+                wm.addView(root, lp)
+                blocker = root
+                blockerLp = lp
+                ui.postDelayed({ hideBlocker() }, 120_000) // 안전장치: 2분 뒤 자동 해제
+            } catch (e: Exception) {
+                RunLog.add("터치 잠금 표시 실패: ${e.message}")
+            }
+        }
+    }
+
+    private fun hideBlocker() {
+        ui.post {
+            blocker?.let {
+                try { getSystemService(WindowManager::class.java).removeView(it) } catch (e: Exception) {}
+            }
+            blocker = null
+            blockerLp = null
+        }
+    }
+
+    /** 제스처를 보내는 동안만 잠금 오버레이를 터치 통과(true)로 바꾸고, 끝나면 원복 */
+    private fun blockerPass(pass: Boolean) {
+        if (blocker == null) return
+        val latch = java.util.concurrent.CountDownLatch(1)
+        ui.post {
+            try {
+                val v = blocker
+                val lp = blockerLp
+                if (v != null && lp != null) {
+                    lp.flags = if (pass) lp.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                    else lp.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
+                    getSystemService(WindowManager::class.java).updateViewLayout(v, lp)
+                }
+            } catch (e: Exception) {
+            }
+            latch.countDown()
+        }
+        latch.await(300, java.util.concurrent.TimeUnit.MILLISECONDS)
+    }
+
     private fun hideOverlay() = ui.post {
         overlay?.let {
             try {
@@ -229,6 +310,7 @@ class MacroService : AccessibilityService() {
         if (running) return
         running = true
         RunLog.clear()
+        showBlocker()
         Thread {
             try {
                 for (n in names) {
@@ -238,10 +320,13 @@ class MacroService : AccessibilityService() {
                     RunLog.add("실행(잠금 해제 후): $n (${steps.size}단계)")
                     execute(n, steps)
                 }
+            } catch (e: CancelledByUser) {
+                report("매크로", "사용자가 중지함")
             } catch (e: Exception) {
                 RunLog.add("오류: ${e.message}")
             } finally {
                 running = false
+                hideBlocker()
             }
         }.start()
     }
@@ -253,13 +338,17 @@ class MacroService : AccessibilityService() {
         running = true
         RunLog.clear()
         RunLog.add("실행: ${macro.name} (${steps.size}단계)")
+        showBlocker()
         Thread {
             try {
                 execute(macro.name, steps)
+            } catch (e: CancelledByUser) {
+                report(macro.name, "사용자가 중지함")
             } catch (e: Exception) {
                 report(macro.name, "오류: ${e.message}")
             } finally {
                 running = false
+                hideBlocker()
             }
         }.start()
     }
@@ -270,7 +359,6 @@ class MacroService : AccessibilityService() {
         for (attempt in 1..MAX_ATTEMPTS) {
             val (ok, msg) = attempt(steps)
             if (ok) {
-                if (MacroStore.autoClose(this) && steps.lastOrNull() != Step.Kill) killApp()
                 report(name, msg)
                 return
             }
@@ -286,7 +374,8 @@ class MacroService : AccessibilityService() {
     /** @return (성공 여부, 메시지) */
     private fun attempt(steps: List<Step>): Pair<Boolean, String> {
         val launch = findTargetApp() ?: return false to "'$TARGET_APP_NAME' 앱을 찾을 수 없음"
-        startActivity(launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP))
+        // 이미 떠 있어도 기존 작업을 비우고 첫 화면부터 새로 시작
+        startActivity(launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK))
         val launchEnd = System.currentTimeMillis() + 6000
         while (System.currentTimeMillis() < launchEnd && rootInActiveWindow?.packageName?.toString() != targetPkg) Thread.sleep(30)
         val dm = resources.displayMetrics
@@ -294,6 +383,7 @@ class MacroService : AccessibilityService() {
             "type=${w.type} act=${w.isActive} d=${if (Build.VERSION.SDK_INT >= 34) w.displayId else -1} " + Rect().also { w.getBoundsInScreen(it) }
         })
         for ((i, step) in steps.withIndex()) {
+            checkCancel()
             val n = i + 1
             RunLog.add("$n. $step")
             val err: String? = when (step) {
@@ -417,6 +507,7 @@ class MacroService : AccessibilityService() {
 
     private fun clickText(text: String, index: Int = 1, retries: Int = 40, touchOnly: Boolean = false, icon: Boolean = false): Boolean {
         repeat(retries) {
+            checkCancel()
             val node = findNode(rootInActiveWindow, text, index)
             if (node != null) {
                 // 전환 애니메이션 중에는 좌표가 움직이므로, 짧은 간격으로 두 번 읽어 위치가 같으면 바로 누름
@@ -507,8 +598,10 @@ class MacroService : AccessibilityService() {
             override fun onCompleted(g: GestureDescription?) { done.countDown() }
             override fun onCancelled(g: GestureDescription?) { done.countDown() }
         }
+        blockerPass(true) // 내 터치가 잠금 화면에 막히지 않게 잠깐 통과시킴
         val ok = dispatchGesture(buildGesture(path, holdMs, displayId), cb, null)
         if (ok) done.await(holdMs + 600, java.util.concurrent.TimeUnit.MILLISECONDS)
+        blockerPass(false)
         return ok
     }
 
@@ -552,6 +645,7 @@ class MacroService : AccessibilityService() {
         val end = System.currentTimeMillis() + ms
         var last: Int? = null
         while (System.currentTimeMillis() < end) {
+            checkCancel()
             val t = readTemp(label)
             if (t != null) {
                 last = t
