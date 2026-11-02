@@ -37,6 +37,7 @@ class MacroService : AccessibilityService() {
     @Volatile private var quick = false
     @Volatile private var targetLabel = ""
     @Volatile private var targetPkg = ""
+    @Volatile private var recordApp = ""
     private val autoStop = Runnable {
         if (quick) { toast("3분 경과: 녹화 자동 종료"); finishQuickRecord() }
     }
@@ -112,9 +113,10 @@ class MacroService : AccessibilityService() {
     fun stopRecording(): String = (recording?.toString() ?: "").also { recording = null }
     val isRecording get() = recording != null
     /** 앱을 켜고 녹화 시작. 알림의 종료 버튼 or 이 앱으로 복귀하면 자동 저장 */
-    fun beginQuickRecord() {
-        val launch = findTargetApp()
-        if (launch == null) { toast("'$TARGET_APP_NAME' 앱을 찾을 수 없음"); return }
+    fun beginQuickRecord(app: String) {
+        recordApp = app
+        val launch = findTargetApp(app)
+        if (launch == null) { toast("'$app' 앱을 찾을 수 없음"); return }
         startRecording()
         quick = true
         ui.postDelayed(autoStop, 180_000)
@@ -133,7 +135,7 @@ class MacroService : AccessibilityService() {
         val script = stopRecording()
         if (script.isBlank()) { toast("기록된 동작이 없음"); return }
         val name = "녹화 " + java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.KOREA).format(java.util.Date())
-        MacroStore.save(this, Macro(name, script))
+        MacroStore.save(this, Macro(name, script, app = recordApp.ifBlank { MacroStore.defaultApp(this) }))
         Shortcuts.update(this)
         report(name, "저장됨 (${script.lines().count { it.isNotBlank() }}단계). 앱에서 확인 후 위젯 추가")
     }
@@ -236,7 +238,7 @@ class MacroService : AccessibilityService() {
                     val (steps, errors) = Step.parse(m.script)
                     if (errors.isNotEmpty()) { report(n, "스크립트 오류 " + errors.first()); continue }
                     RunLog.add("실행(잠금 해제 후): $n (${steps.size}단계)")
-                    execute(n, steps)
+                    execute(n, steps, m.app)
                 }
             } catch (e: Exception) {
                 RunLog.add("오류: ${e.message}")
@@ -255,7 +257,7 @@ class MacroService : AccessibilityService() {
         RunLog.add("실행: ${macro.name} (${steps.size}단계)")
         Thread {
             try {
-                execute(macro.name, steps)
+                execute(macro.name, steps, macro.app)
             } catch (e: Exception) {
                 report(macro.name, "오류: ${e.message}")
             } finally {
@@ -264,11 +266,11 @@ class MacroService : AccessibilityService() {
         }.start()
     }
 
-    private fun execute(name: String, steps: List<Step>) {
+    private fun execute(name: String, steps: List<Step>, app: String) {
         if (!prepareScreen(name)) { RunLog.add("화면 준비 실패(잠금)"); return }
         var last = ""
         for (attempt in 1..MAX_ATTEMPTS) {
-            val (ok, msg) = attempt(steps)
+            val (ok, msg) = attempt(steps, app)
             if (ok) {
                 if (MacroStore.autoClose(this) && steps.lastOrNull() != Step.Kill) killApp()
                 report(name, msg)
@@ -284,8 +286,8 @@ class MacroService : AccessibilityService() {
     }
 
     /** @return (성공 여부, 메시지) */
-    private fun attempt(steps: List<Step>): Pair<Boolean, String> {
-        val launch = findTargetApp() ?: return false to "'$TARGET_APP_NAME' 앱을 찾을 수 없음"
+    private fun attempt(steps: List<Step>, app: String): Pair<Boolean, String> {
+        val launch = findTargetApp(app) ?: return false to "'$app' 앱을 찾을 수 없음"
         startActivity(launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP))
         val launchEnd = System.currentTimeMillis() + 6000
         while (System.currentTimeMillis() < launchEnd && rootInActiveWindow?.packageName?.toString() != targetPkg) Thread.sleep(30)
@@ -305,6 +307,22 @@ class MacroService : AccessibilityService() {
                 Step.Home -> { performGlobalAction(GLOBAL_ACTION_HOME); null }
                 Step.Back -> { performGlobalAction(GLOBAL_ACTION_BACK); null }
                 Step.Kill -> { killApp(); null }
+                is Step.TapPct -> {
+                    val ref = screenRect()
+                    repeatTap(ref.left + ref.width() * step.xp / 100f, ref.top + ref.height() * step.yp / 100f, step.repeat)
+                    null
+                }
+                is Step.Near -> {
+                    val anchor = waitNode(step.anchor, step.index, 5000)
+                    if (anchor == null) "${n}단계 기준 '${step.anchor}' 못 찾음" else {
+                        val a = Rect().also { anchor.getBoundsInScreen(it) }
+                        val ref = screenRect()
+                        repeatTap(a.exactCenterX() + ref.width() * step.dxp / 100f, a.exactCenterY() + ref.height() * step.dyp / 100f, step.repeat)
+                        null
+                    }
+                }
+                is Step.ClickId -> if (clickById(step.id, step.index)) null else "${n}단계 id '${step.id}' 못 찾음"
+                is Step.Until -> { waitUntil(step.h, step.m, step.s); null }
             }
             if (err != null) {
                 RunLog.add("실패: $err")
@@ -343,11 +361,11 @@ class MacroService : AccessibilityService() {
         return true
     }
 
-    private fun findTargetApp(): Intent? {
+    private fun findTargetApp(app: String): Intent? {
         val pm = packageManager
         val q = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
         val match = pm.queryIntentActivities(q, PackageManager.MATCH_ALL)
-            .firstOrNull { it.activityInfo.packageName != packageName && it.loadLabel(pm).toString().contains(TARGET_APP_NAME) }
+            .firstOrNull { it.activityInfo.packageName != packageName && it.loadLabel(pm).toString().contains(app, ignoreCase = true) }
             ?: return null
         targetLabel = match.loadLabel(pm).toString()
         targetPkg = match.activityInfo.packageName
@@ -402,6 +420,64 @@ class MacroService : AccessibilityService() {
         dispatchGesture(buildGesture(path, 160, activeDisplayId()), null, null)
         Thread.sleep(250)
         performGlobalAction(GLOBAL_ACTION_HOME)
+    }
+
+    /** 앱 창(없으면 화면) 영역: 비율 좌표의 기준 */
+    private fun screenRect(): Rect {
+        val r = Rect()
+        rootInActiveWindow?.getBoundsInScreen(r)
+        if (r.isEmpty) {
+            val dm = resources.displayMetrics
+            r.set(0, 0, dm.widthPixels, dm.heightPixels)
+        }
+        return r
+    }
+
+    private fun repeatTap(x: Float, y: Float, count: Int) {
+        repeat(count) { tap(x, y, 60) }
+    }
+
+    private fun waitNode(text: String, index: Int, ms: Long): AccessibilityNodeInfo? {
+        val end = System.currentTimeMillis() + ms
+        while (System.currentTimeMillis() < end) {
+            findNode(rootInActiveWindow, text, index)?.let { return it }
+            Thread.sleep(40)
+        }
+        return null
+    }
+
+    private fun clickById(id: String, index: Int): Boolean {
+        val end = System.currentTimeMillis() + 5000
+        while (System.currentTimeMillis() < end) {
+            val hits = mutableListOf<AccessibilityNodeInfo>()
+            val stack = ArrayDeque<AccessibilityNodeInfo>()
+            rootInActiveWindow?.let { stack.add(it) }
+            while (stack.isNotEmpty()) {
+                val n = stack.removeFirst()
+                if (n.viewIdResourceName?.contains(id) == true) hits.add(n)
+                for (i in 0 until n.childCount) n.getChild(i)?.let { stack.add(it) }
+            }
+            val node = hits.filter { it.isVisibleToUser }.ifEmpty { hits }.getOrNull(index - 1)
+            if (node != null && press(node)) return true
+            Thread.sleep(40)
+        }
+        return false
+    }
+
+    /** 오늘 h:m:s 가 될 때까지 대기 (이미 5분 넘게 지났으면 건너뜀) */
+    private fun waitUntil(h: Int, m: Int, s: Int) {
+        val cal = java.util.Calendar.getInstance().apply {
+            set(java.util.Calendar.HOUR_OF_DAY, h); set(java.util.Calendar.MINUTE, m)
+            set(java.util.Calendar.SECOND, s); set(java.util.Calendar.MILLISECOND, 0)
+        }
+        val target = cal.timeInMillis
+        if (System.currentTimeMillis() - target > 5 * 60_000L) { RunLog.add("  until: 이미 지난 시각이라 건너뜀"); return }
+        RunLog.add("  until: ${h}:${m}:${s} 까지 대기")
+        while (true) {
+            val left = target - System.currentTimeMillis()
+            if (left <= 0) break
+            Thread.sleep(if (left > 200) 100 else 5)
+        }
     }
 
     private fun waitFor(text: String, index: Int, ms: Long): Boolean {

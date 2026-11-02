@@ -9,6 +9,10 @@ package com.koolon.macro
  *   wait <ms>                 대기
  *   temp <목표> <+글자> <-글자> [기준글자]  기준글자(예: 설정 온도) 다음에 나오는 온도를 읽어 목표까지 +/- 클릭
  *   stopif <글자>             글자가 화면에 있으면 "이미 완료"로 종료
+ *   tap <x>% <y>% [xN]        화면(앱 창) 비율 좌표를 터치. xN 이면 N번 연타 (문구 없는 버튼용)
+ *   near <기준글자> [@N] <dx>% <dy>% [xN]   기준글자 중심에서 화면 비율만큼 떨어진 곳을 터치
+ *   id <리소스ID> [@N]        view id(일부 일치)로 클릭
+ *   until HH:mm[:ss]          그 시각이 될 때까지 대기 (선착순 정각 대기용)
  *   kill                      최근 앱 화면에서 현재 앱을 밀어서 종료 (실행 후 자동 종료가 켜져 있으면 생략 가능)
  *   home / back               홈 / 뒤로
  */
@@ -21,6 +25,10 @@ sealed class Step {
     object Home : Step()
     object Back : Step()
     object Kill : Step()
+    data class TapPct(val xp: Float, val yp: Float, val repeat: Int = 1) : Step()
+    data class Near(val anchor: String, val index: Int, val dxp: Float, val dyp: Float, val repeat: Int = 1) : Step()
+    data class ClickId(val id: String, val index: Int = 1) : Step()
+    data class Until(val h: Int, val m: Int, val s: Int) : Step()
 
     companion object {
         /** @return (단계 목록, 오류 줄 목록) */
@@ -44,9 +52,37 @@ sealed class Step {
                     }
                     "stopif" -> if (arg.isNotEmpty()) StopIf(arg) else null
                     "tap" -> {
-                        val x = a.getOrNull(0)?.toFloatOrNull()
-                        val y = a.getOrNull(1)?.toFloatOrNull()
-                        if (x != null && y != null) Tap(x, y) else null
+                        if (arg.contains("%")) {
+                            val x = a.getOrNull(0)?.removeSuffix("%")?.toFloatOrNull()
+                            val y = a.getOrNull(1)?.removeSuffix("%")?.toFloatOrNull()
+                            val n = a.getOrNull(2)?.removePrefix("x")?.toIntOrNull() ?: 1
+                            if (x != null && y != null) TapPct(x, y, n.coerceIn(1, 200)) else null
+                        } else {
+                            val x = a.getOrNull(0)?.toFloatOrNull()
+                            val y = a.getOrNull(1)?.toFloatOrNull()
+                            if (x != null && y != null) Tap(x, y) else null
+                        }
+                    }
+                    "near" -> {
+                        val m = Regex("^(.*?)(?:\\s+@(\\d+))?\\s+(-?[0-9.]+)%\\s+(-?[0-9.]+)%(?:\\s+x(\\d+))?$").find(arg)
+                        if (m != null && m.groupValues[1].isNotBlank()) {
+                            val dx = m.groupValues[3].toFloatOrNull()
+                            val dy = m.groupValues[4].toFloatOrNull()
+                            if (dx != null && dy != null) Near(
+                                m.groupValues[1].trim(),
+                                m.groupValues[2].toIntOrNull() ?: 1,
+                                dx, dy,
+                                (m.groupValues[5].toIntOrNull() ?: 1).coerceIn(1, 200),
+                            ) else null
+                        } else null
+                    }
+                    "id" -> {
+                        val m = Regex("^(\\S+)(?:\\s+@(\\d+))?$").find(arg)
+                        if (m != null) ClickId(m.groupValues[1], m.groupValues[2].toIntOrNull() ?: 1) else null
+                    }
+                    "until" -> {
+                        val t = arg.split(":").mapNotNull { it.trim().toIntOrNull() }
+                        if (t.size >= 2) Until(t[0], t[1], t.getOrElse(2) { 0 }) else null
                     }
                     "temp" -> {
                         val t = a.getOrNull(0)?.toIntOrNull()
