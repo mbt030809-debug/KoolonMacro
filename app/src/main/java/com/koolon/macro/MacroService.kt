@@ -363,6 +363,9 @@ class MacroService : AccessibilityService() {
         for (attempt in 1..MAX_ATTEMPTS) {
             val (ok, msg) = attempt(steps)
             if (ok) {
+                // 마지막 동작이 앱에 전달될 짧은 시간을 준 뒤 홈 화면으로 (앱은 끄지 않음)
+                Thread.sleep(HOME_DELAY_MS)
+                performGlobalAction(GLOBAL_ACTION_HOME)
                 report(name, msg)
                 return
             }
@@ -703,6 +706,7 @@ class MacroService : AccessibilityService() {
         const val LAUNCH_WAIT_MS = 250L
         const val STEP_GAP_MS = 80L
         const val MAX_ATTEMPTS = 1
+        const val HOME_DELAY_MS = 500L // 완료 후 홈으로 가기 전 대기
         const val PENDING_MAX_AGE_MS = 3 * 60 * 60 * 1000L // 예약 시각 후 3시간 안에 해제하면 실행
         const val TOUCH_HOLD_MS = 150L // 누르는 시간 (너무 길면 롱프레스로 인식)
     }
