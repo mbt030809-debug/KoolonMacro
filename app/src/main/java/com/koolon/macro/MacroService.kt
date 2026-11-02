@@ -38,6 +38,7 @@ class MacroService : AccessibilityService() {
     @Volatile private var targetLabel = ""
     @Volatile private var targetPkg = ""
     @Volatile private var cancelRequested = false
+    @Volatile private var lastWinStateAt = 0L
     private var blocker: View? = null
     private var blockerLp: WindowManager.LayoutParams? = null
 
@@ -74,6 +75,9 @@ class MacroService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        if (event != null && event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
+            event.packageName?.toString() == targetPkg
+        ) lastWinStateAt = System.currentTimeMillis()
         val rec = recording ?: return
         if (running) return // 재생 중 클릭은 기록하지 않음
         if (event == null || event.eventType != AccessibilityEvent.TYPE_VIEW_CLICKED) return
@@ -375,9 +379,17 @@ class MacroService : AccessibilityService() {
     private fun attempt(steps: List<Step>): Pair<Boolean, String> {
         val launch = findTargetApp() ?: return false to "'$TARGET_APP_NAME' 앱을 찾을 수 없음"
         // 이미 떠 있어도 기존 작업을 비우고 첫 화면부터 새로 시작
+        val launchedAt = System.currentTimeMillis()
         startActivity(launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK))
-        val launchEnd = System.currentTimeMillis() + 6000
-        while (System.currentTimeMillis() < launchEnd && rootInActiveWindow?.packageName?.toString() != targetPkg) Thread.sleep(30)
+        // 이미 떠 있던 옛 화면이 아니라, 새로 시작된 창(창 전환 이벤트)이 뜰 때까지 기다림
+        val launchEnd = launchedAt + 7000
+        while (System.currentTimeMillis() < launchEnd) {
+            checkCancel()
+            if (lastWinStateAt >= launchedAt && rootInActiveWindow?.packageName?.toString() == targetPkg) break
+            Thread.sleep(30)
+        }
+        RunLog.add("새 창 감지 ${System.currentTimeMillis() - launchedAt}ms (이벤트=${lastWinStateAt >= launchedAt})")
+        Thread.sleep(250) // 새 화면 안정화
         val dm = resources.displayMetrics
         RunLog.add("화면 ${dm.widthPixels}x${dm.heightPixels} 창: " + windows.joinToString(" ; ") { w ->
             "type=${w.type} act=${w.isActive} d=${if (Build.VERSION.SDK_INT >= 34) w.displayId else -1} " + Rect().also { w.getBoundsInScreen(it) }
@@ -388,7 +400,7 @@ class MacroService : AccessibilityService() {
             RunLog.add("$n. $step")
             val err: String? = when (step) {
                 is Step.Wait -> { Thread.sleep(step.ms); null }
-                is Step.ClickText -> if (clickText(step.text, step.index, 40, step.touch, step.icon)) null else "${n}단계 '${step.text}' @${step.index} 못 찾음"
+                is Step.ClickText -> if (clickText(step.text, step.index, 15000, step.touch, step.icon)) null else "${n}단계 '${step.text}' @${step.index} 못 찾음"
                 is Step.Tap -> if (tap(step.x, step.y)) null else "${n}단계 탭 실패"
                 is Step.Temp -> if (setTemp(step)) null else "${n}단계 온도 ${step.target}도 설정 실패"
                 is Step.StopIf -> if (isVisible(step.text)) return true to "이미 완료됨 ('${step.text}' 확인)" else null
@@ -505,8 +517,9 @@ class MacroService : AccessibilityService() {
 
     private fun isVisible(text: String) = findNode(rootInActiveWindow, text) != null
 
-    private fun clickText(text: String, index: Int = 1, retries: Int = 40, touchOnly: Boolean = false, icon: Boolean = false): Boolean {
-        repeat(retries) {
+    private fun clickText(text: String, index: Int = 1, timeoutMs: Long = 12000, touchOnly: Boolean = false, icon: Boolean = false): Boolean {
+        val end = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < end) {
             checkCancel()
             val node = findNode(rootInActiveWindow, text, index)
             if (node != null) {
@@ -599,6 +612,7 @@ class MacroService : AccessibilityService() {
             override fun onCancelled(g: GestureDescription?) { done.countDown() }
         }
         blockerPass(true) // 내 터치가 잠금 화면에 막히지 않게 잠깐 통과시킴
+        if (blocker != null) Thread.sleep(50)
         val ok = dispatchGesture(buildGesture(path, holdMs, displayId), cb, null)
         if (ok) done.await(holdMs + 600, java.util.concurrent.TimeUnit.MILLISECONDS)
         blockerPass(false)
@@ -634,7 +648,7 @@ class MacroService : AccessibilityService() {
         repeat(40) {
             RunLog.add("  현재 설정 온도 $cur")
             if (cur == s.target) return true
-            if (!clickText(if (cur < s.target) s.plus else s.minus, 1, 40)) return false
+            if (!clickText(if (cur < s.target) s.plus else s.minus, 1, 6000)) return false
             cur = waitTemp(s.label, cur, 900) ?: cur // 값이 바뀌는 즉시 다음 클릭
         }
         return false
@@ -688,7 +702,7 @@ class MacroService : AccessibilityService() {
         const val TARGET_APP_NAME = "코오롱"
         const val LAUNCH_WAIT_MS = 250L
         const val STEP_GAP_MS = 80L
-        const val MAX_ATTEMPTS = 2
+        const val MAX_ATTEMPTS = 1
         const val PENDING_MAX_AGE_MS = 3 * 60 * 60 * 1000L // 예약 시각 후 3시간 안에 해제하면 실행
         const val TOUCH_HOLD_MS = 150L // 누르는 시간 (너무 길면 롱프레스로 인식)
     }
