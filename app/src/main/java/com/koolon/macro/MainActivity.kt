@@ -33,18 +33,8 @@ class MainActivity : Activity() {
         root.addView(status)
         root.addView(btn("⏺ 녹화: 내가 하는 동작 따라하기") {
             val s = MacroService.instance
-            if (s == null) toast("접근성 서비스가 꺼져 있음") else s.beginQuickRecord(MacroStore.defaultApp(this))
+            if (s == null) toast("접근성 서비스가 꺼져 있음") else s.beginQuickRecord()
         })
-        val appEt = android.widget.EditText(this).apply {
-            hint = "녹화·새 매크로의 기본 대상 앱 이름"
-            setText(MacroStore.defaultApp(this@MainActivity))
-            addTextChangedListener(object : android.text.TextWatcher {
-                override fun afterTextChanged(s: android.text.Editable?) { MacroStore.setDefaultApp(this@MainActivity, s.toString().trim()) }
-                override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
-                override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
-            })
-        }
-        root.addView(appEt)
         root.addView(btn("① 앱 정보 열기 (⋮ → 제한된 설정 허용)") {
             startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
         })

@@ -19,12 +19,3 @@ jobs:
         with:
           name: KoolonMacro-apk
           path: app/build/outputs/apk/debug/app-debug.apk
-      - name: APK 서명·버전 확인
-        continue-on-error: true
-        run: |
-          APK=app/build/outputs/apk/debug/app-debug.apk
-          BT=$ANDROID_HOME/build-tools/$(ls $ANDROID_HOME/build-tools | sort -V | tail -1)
-          echo "== APKINFO =="
-          $BT/apksigner verify --print-certs $APK 2>&1 | head -8
-          $BT/aapt2 dump badging $APK 2>&1 | head -2
-          echo "== END =="

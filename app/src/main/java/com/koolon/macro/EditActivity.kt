@@ -18,7 +18,6 @@ class EditActivity : Activity() {
 
     private lateinit var nameEt: EditText
     private lateinit var scriptEt: EditText
-    private lateinit var appEt: EditText
     private val dayCbs = mutableListOf<CheckBox>()
     private lateinit var timeBtn: Button
     private lateinit var recBtn: Button
@@ -37,9 +36,7 @@ class EditActivity : Activity() {
             text = "명령어 (한 줄에 하나, # 은 주석)\n" +
                 "click 글자 · tap x y · wait ms\n" +
                 "temp 26 + -  (목표온도, +버튼글자, -버튼글자)\n" +
-                "stopif 글자 (있으면 이미 완료로 종료) · home · back\n" +
-                "문구 없는 버튼: tap 32% 38% x5 · near 기준글자 9% 8% x5 · id 리소스ID\n" +
-                "until 10:00:00 (정각까지 대기)"
+                "stopif 글자 (있으면 이미 완료로 종료) · home · back"
         })
         nameEt = EditText(this).apply {
             hint = "매크로 이름"
@@ -47,11 +44,6 @@ class EditActivity : Activity() {
             isEnabled = editing == null
         }
         root.addView(nameEt)
-        appEt = EditText(this).apply {
-            hint = "대상 앱 이름 (런처에 보이는 이름의 일부)"
-            setText(m?.app ?: MacroStore.defaultApp(this@EditActivity))
-        }
-        root.addView(appEt)
         scriptEt = EditText(this).apply {
             hint = "click 난방\nclick 실내"
             setText(m?.script ?: "")
@@ -121,7 +113,7 @@ class EditActivity : Activity() {
         refreshRec()
     }
 
-    private fun current(name: String) = Macro(name, scriptEt.text.toString(), time, dayCbs.withIndex().sumOf { (i, c) -> if (c.isChecked) 1 shl i else 0 }, appEt.text.toString().trim().ifBlank { "코오롱" })
+    private fun current(name: String) = Macro(name, scriptEt.text.toString(), time, dayCbs.withIndex().sumOf { (i, c) -> if (c.isChecked) 1 shl i else 0 })
 
     private fun save() {
         val name = nameEt.text.toString().trim()

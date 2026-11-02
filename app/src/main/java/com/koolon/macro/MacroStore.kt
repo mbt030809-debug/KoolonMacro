@@ -12,19 +12,12 @@ data class Macro(
     /** 집 근처 도착 시 실행 */
     /** 요일 비트마스크 (월=1, 화=2, … 일=64), 기본 매일 */
     val days: Int = 127,
-    /** 대상 앱 이름(런처에 보이는 이름의 일부). 기본 코오롱 */
-    val app: String = "코오롱",
 )
 
 object MacroStore {
     /** 덤프로 확인한 코오롱 화면 기준 예시: 난방 → 안방 상세 설정 → 난방 모드 → 설정 온도 26 */
     const val SAMPLE2_NAME = "안방 외출"
     const val SAMPLE2_SCRIPT = "icon 난방\nclick 상세 설정 @2\nclick 외출\n"
-
-    /** 새 매크로·녹화에 쓰는 기본 대상 앱 이름 */
-    fun defaultApp(ctx: Context): String = prefs(ctx).getString("defaultApp", "코오롱") ?: "코오롱"
-
-    fun setDefaultApp(ctx: Context, v: String) = prefs(ctx).edit().putString("defaultApp", v.ifBlank { "코오롱" }).apply()
 
     fun autoClose(ctx: Context) = prefs(ctx).getBoolean("autoClose", true)
 
@@ -50,7 +43,6 @@ object MacroStore {
                 o.getString("script"),
                 if (o.isNull("time")) null else o.getString("time"),
                 o.optInt("days", 127),
-                o.optString("app", "코오롱").ifBlank { "코오롱" },
             )
         }
     }
@@ -69,7 +61,7 @@ object MacroStore {
         val arr = JSONArray()
         list.forEach {
             arr.put(JSONObject().put("name", it.name).put("script", it.script)
-                .put("time", it.time ?: JSONObject.NULL).put("days", it.days).put("app", it.app))
+                .put("time", it.time ?: JSONObject.NULL).put("days", it.days))
         }
         prefs(ctx).edit().putString("macros", arr.toString()).apply()
     }
